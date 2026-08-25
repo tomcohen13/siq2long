@@ -12,12 +12,7 @@ class VLM(ABC):
     to be inherited and implemented by individual models.
     """
 
-
-    def __init__(self):
-
-        self.name = ...
-        self.model = ...
-        self.processor = ...
+    max_batch_size: int = 1
 
     @abstractmethod
     def prepare_clip(self, video_path: str, transcript: str) -> Any:
