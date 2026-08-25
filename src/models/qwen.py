@@ -52,7 +52,7 @@ class QwenVLM(VLM):
         fps: float = 1.0,
         max_frames: int = 128,
         max_new_tokens: int = 32,
-        max_pixels = 448 * 448,
+        max_pixels: int = 448 * 448,
         dtype=torch.bfloat16,
         max_batch_size: int = 8,
     ):

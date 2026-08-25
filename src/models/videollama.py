@@ -2,13 +2,10 @@ import torch
 
 from src.models.vlm import VLM
 
-NAME = "DAMO-NLP-SG/VideoLLaMA3-7B"
-SYSTEM = "You are a helpful assistant."
-
-
 class VideoLlama3(VLM):
     """VideoLLaMA3 via the DAMO remote-code path. One question per forward pass."""
 
+    CHECKPOINT: str = "DAMO-NLP-SG/VideoLLaMA3-7B"
     max_batch_size = 1
 
     def __init__(
@@ -19,22 +16,23 @@ class VideoLlama3(VLM):
         dtype=torch.bfloat16
     ):
         from transformers import AutoModelForCausalLM, AutoProcessor
-
-        try:
-            attn = "flash_attention_2"
-            self.model = AutoModelForCausalLM.from_pretrained(
-                NAME, trust_remote_code=True, device_map="auto",
-                torch_dtype=dtype, attn_implementation=attn,
-            )
-        except (ImportError, ValueError):
-            attn = "sdpa"
-            self.model = AutoModelForCausalLM.from_pretrained(
-                NAME, trust_remote_code=True, device_map="auto",
-                torch_dtype=dtype, attn_implementation=attn,
-            )
+        for attn in ("flash_attention_2", "sdpa"):
+            try:
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.CHECKPOINT,
+                    device_map="auto",
+                    torch_dtype=self.dtype,
+                    attn_implementation=attn,
+                    trust_remote_code=True,
+                )
+                self.attn = attn
+                break
+            except (ImportError, ValueError) as e:
+                print(f"couldn't load {self.CHECKPOINT}: {e}")
+                continue
 
         self.model.eval()
-        self.processor = AutoProcessor.from_pretrained(NAME, trust_remote_code=True)
+        self.processor = AutoProcessor.from_pretrained(CHECKPOINT, trust_remote_code=True)
 
         self.fps = fps
         self.max_frames = max_frames
