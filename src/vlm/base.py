@@ -8,7 +8,7 @@ from config import ANSWER_KEYS, Columns
 
 class VLM(ABC):
     """
-    Abstraction of video-language models, 
+    Abstraction of video-language model, 
     to be inherited and implemented by individual models.
     """
 
