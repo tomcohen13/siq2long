@@ -37,7 +37,7 @@ def find_downloaded_files(path_to_dataset: str | Path, to_dataframe: bool = Fals
 
 	transcripts_df = pd.DataFrame(
 		list(
-			{Columns.VIDEO_ID: v.stem, Columns.VIDEO_PATH: v}
+			{Columns.VIDEO_ID: v.stem, Columns.TRANSCRIPT_PATH: v}
 			for v in transcripts_dir.iterdir()
 			if not v.stem.startswith("._")
 			and v.name.endswith(".vtt")

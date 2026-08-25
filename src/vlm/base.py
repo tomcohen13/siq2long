@@ -24,11 +24,12 @@ class VLM(ABC):
         """Returns one raw completion per row."""
         raise NotImplementedError("Must implement method within inheriting class")
 
-    def render_question(record):
-        PROMPT = (
-            "{question}\n{options}\n"
-            "Answer with the number of the correct option, and nothing else."
-        ).format()
+    PROMPT = (
+        "{question}\n{options}\n"
+        "Answer with the number of the correct option, and nothing else."
+    )
 
+    @classmethod
+    def render_question(cls, record: dict) -> str:
         options = "\n".join(f"{i}. {record[k]}" for i, k in enumerate(ANSWER_KEYS))
-        return PROMPT.format(question=record[Columns.QUESTION], options=options)
+        return cls.PROMPT.format(question=record[Columns.QUESTION], options=options)

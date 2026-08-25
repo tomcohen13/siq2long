@@ -1,6 +1,6 @@
 import torch
 
-from src.models.vlm import VLM
+from src.vlm.base import VLM
 
 class VideoLlama3(VLM):
     """VideoLLaMA3 via the DAMO remote-code path. One question per forward pass."""
@@ -15,7 +15,13 @@ class VideoLlama3(VLM):
         max_new_tokens: int = 32,
         dtype=torch.bfloat16
     ):
+        self.fps = fps
+        self.max_frames = max_frames
+        self.max_new_tokens = max_new_tokens
+        self.dtype = dtype
+
         from transformers import AutoModelForCausalLM, AutoProcessor
+        self.model = self.attn = None
         for attn in ("flash_attention_2", "sdpa"):
             try:
                 self.model = AutoModelForCausalLM.from_pretrained(
@@ -28,17 +34,13 @@ class VideoLlama3(VLM):
                 self.attn = attn
                 break
             except (ImportError, ValueError) as e:
-                print(f"couldn't load {self.CHECKPOINT}: {e}")
+                print(f"couldn't load {self.CHECKPOINT} with {attn}: {e}")
                 continue
+        if self.model is None:
+            raise RuntimeError(f"could not load {self.CHECKPOINT} with any attention backend")
 
         self.model.eval()
-        self.processor = AutoProcessor.from_pretrained(CHECKPOINT, trust_remote_code=True)
-
-        self.fps = fps
-        self.max_frames = max_frames
-        self.max_new_tokens = max_new_tokens
-        self.dtype = dtype
-        self.attn = attn
+        self.processor = AutoProcessor.from_pretrained(self.CHECKPOINT, trust_remote_code=True)
 
     def prepare_clip(self, video_path, transcript):
         return {"video_path": video_path, "transcript": transcript}

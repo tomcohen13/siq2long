@@ -7,11 +7,11 @@ from transformers import AutoProcessor
 os.environ["FORCE_QWENVL_VIDEO_READER"] = "torchcodec"  # must precede the import below
 from qwen_vl_utils import process_vision_info
 
-from src.models.vlm import VLM
+from src.vlm.base import VLM
 
 class QwenModels(StrEnum):
-    Qwen25VL7BInstruct = "Qwen/Qwen2.5-VL-7B-Instruct"
-    Qwen3VL8bInstruct = "Qwen/Qwen3-VL-8B-Instruct"
+    Qwen2_5VL7BInstruct = "Qwen/Qwen2.5-VL-7B-Instruct"
+    Qwen3VL8BInstruct = "Qwen/Qwen3-VL-8B-Instruct"
 
 
 class QwenVLM(VLM):
@@ -27,6 +27,7 @@ class QwenVLM(VLM):
     def _load(self):
 
         model_cls = self._model_cls()
+        self.model = self.attn = None
         for attn in ("flash_attention_2", "sdpa"):
             try:
                 self.model = model_cls.from_pretrained(
@@ -36,8 +37,10 @@ class QwenVLM(VLM):
                 self.attn = attn
                 break
             except (ImportError, ValueError) as e:
-                print(f"couldn't load {self.CHECKPOINT}: {e}")
+                print(f"couldn't load {self.CHECKPOINT} with {attn}: {e}")
                 continue
+        if self.model is None:
+            raise RuntimeError(f"could not load {self.CHECKPOINT} with any attention backend")
 
         self.model.eval()
         gen_config = self.model.generation_config
@@ -140,9 +143,9 @@ class QwenVLM(VLM):
         return texts
 
 
-class Qwen25VL(QwenVLM):
+class Qwen2_5VL(QwenVLM):
 
-    CHECKPOINT = QwenModels.Qwen25VL7BInstruct
+    CHECKPOINT = QwenModels.Qwen2_5VL7BInstruct
     return_video_metadata = False
     do_resize = True
 
@@ -155,7 +158,7 @@ class Qwen25VL(QwenVLM):
 class Qwen3VL(QwenVLM):
     """Qwen3-VL-8B-Instruct"""
 
-    CHECKPOINT = QwenModels.Qwen3VL8bInstruct
+    CHECKPOINT = QwenModels.Qwen3VL8BInstruct
     return_video_metadata = True
     do_resize = False
 

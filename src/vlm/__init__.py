@@ -1,4 +1,7 @@
 """Export VLMs for ease of access"""
 
-from qwen import Qwen25VL, Qwen3VL
-from videollama import VideoLlama3
+from src.vlm.base import VLM
+from src.vlm.qwen import Qwen2_5VL, Qwen3VL
+from src.vlm.videollama import VideoLlama3
+
+__all__ = ["VLM", "Qwen2_5VL", "Qwen3VL", "VideoLlama3"]

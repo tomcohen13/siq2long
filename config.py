@@ -19,6 +19,7 @@ class Columns(StrEnum):
     ANSWER_1 = "a1"
     ANSWER_2 = "a2"
     ANSWER_3 = "a3"
+    ANSWER_IDX = "answer_idx"  # absent in the test split
 
     VIDEO_PATH = "path_to_video"
     TRANSCRIPT_PATH = "path_to_transcript"
