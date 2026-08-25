@@ -5,3 +5,12 @@ scripts/
 .env
 playground.ipynb
 CLAUDE.md
+.vscode/
+
+# build / test artifacts
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# inference outputs (results.jsonl and friends)
+outputs/

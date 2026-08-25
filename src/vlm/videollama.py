@@ -1,6 +1,6 @@
 import torch
 
-from src.vlm.base import VLM
+from vlm.base import VLM
 
 class VideoLlama3(VLM):
     """VideoLLaMA3 via the DAMO remote-code path. One question per forward pass."""

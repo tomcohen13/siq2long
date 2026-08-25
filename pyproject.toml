@@ -1,0 +1,38 @@
+[project]
+name = "siq2long"
+version = "0.1.0"
+description = "Retrieval-first video QA on Social-IQ 2.0: oracle-clip finding and long-video evaluation"
+requires-python = ">=3.12"
+dependencies = [
+    "accelerate",     # device_map="auto"
+    "pandas",
+    "python-dotenv",
+    "qwen-vl-utils",
+    "torch",
+    "torchcodec",     # FORCE_QWENVL_VIDEO_READER
+    "tqdm",
+    "transformers",
+    "webvtt-py",
+]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# src/ is the import root, so modules are `config`, `inference`, `vlm.*`, `data.*`
+# with no package prefix. Deliberately no src/__init__.py: if the repo root were
+# also importable, `vlm.base` and `src.vlm.base` would be two distinct modules
+# and isinstance checks against VLM would fail across them.
+[tool.setuptools]
+package-dir = { "" = "src" }
+py-modules = ["config", "inference"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

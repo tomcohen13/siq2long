@@ -7,7 +7,7 @@ from transformers import AutoProcessor
 os.environ["FORCE_QWENVL_VIDEO_READER"] = "torchcodec"  # must precede the import below
 from qwen_vl_utils import process_vision_info
 
-from src.vlm.base import VLM
+from vlm.base import VLM
 
 class QwenModels(StrEnum):
     Qwen2_5VL7BInstruct = "Qwen/Qwen2.5-VL-7B-Instruct"

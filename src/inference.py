@@ -9,11 +9,17 @@ which lets VideoLLaMA3 (1 question/pass) and Qwen (8) share this loop.
 Predictions are the first 0-3 digit in the completion. An unparseable
 completion is recorded as None and counted, never guessed -- a coin-flip
 fallback would inflate accuracy by ~25% of the unparsed rate.
+
+Results are plain dicts, matching the JSONL written alongside them. Pandas
+retypes None to NaN and int to np.int64, which makes "missing" mean two
+different things in the same run; use `to_frame` when you want a DataFrame
+for analysis.
 """
 
 import gc
 import json
 import re
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 import pandas as pd
@@ -21,17 +27,63 @@ import torch
 from tqdm.auto import tqdm
 
 from config import Columns
-from src.vlm.base import VLM
+from vlm.base import VLM
 
 DIGIT_RE = re.compile(r"[0-3]")
-
-RESULT_COLUMNS = ["video", "qid", "pred", "gold", "correct", "raw"]
 
 
 def parse(text: str) -> int | None:
     """First 0-3 in the output, or None. None is recorded, never guessed."""
     m = DIGIT_RE.search(text)
     return int(m.group()) if m else None
+
+
+@dataclass(slots=True)
+class Result:
+    """
+    One scored question, and the schema of a JSONL line.
+
+    `pred` is None when the completion held no 0-3 digit. `gold` and `correct`
+    are None for unlabeled rows -- the test split ships no `answer_idx` -- which
+    keeps them out of the accuracy denominator instead of counting them wrong.
+    """
+
+    video: str
+    qid: str
+    pred: int | None
+    gold: int | None
+    correct: bool | None
+    raw: str
+
+    @classmethod
+    def score(cls, row: dict, video: str, completion: str) -> "Result":
+        pred = parse(completion)
+        gold = row.get(Columns.ANSWER_IDX)
+        # pd.isna: a DataFrame of mixed labeled/unlabeled rows stores the gap as NaN.
+        # int(): a numpy scalar from that same round-trip would make json.dumps raise.
+        gold = None if pd.isna(gold) else int(gold)
+        return cls(
+            video=video,
+            qid=row[Columns.QID],
+            pred=pred,
+            gold=gold,
+            correct=None if gold is None else (pred is not None and pred == gold),
+            raw=completion.strip(),
+        )
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+def to_frame(results: list[Result]) -> pd.DataFrame:
+    """
+    Results as a DataFrame, for analysis only.
+
+    Nullable dtypes are deliberate: plain int64/bool columns would turn every
+    None into a NaN float, and NaN compares false against None and itself.
+    """
+    df = pd.DataFrame([r.as_dict() for r in results], columns=[f.name for f in fields(Result)])
+    return df.astype({"pred": "Int64", "gold": "Int64", "correct": "boolean"})
 
 
 def group_by_video(rows: pd.DataFrame | list[dict]) -> dict[str, list[dict]]:
@@ -45,23 +97,28 @@ def group_by_video(rows: pd.DataFrame | list[dict]) -> dict[str, list[dict]]:
     return groups
 
 
-def summarize(results: list[dict] | pd.DataFrame, n_examples: int = 5) -> float | None:
-    """Print n / accuracy / unparsed rate. Returns accuracy, or None if unlabeled."""
-    if isinstance(results, pd.DataFrame):
-        results = results.to_dict(orient="records")
+def summarize(results: list[Result | dict], n_examples: int = 5) -> float | None:
+    """
+    Print n / accuracy / unparsed rate. Returns accuracy, or None if unlabeled.
+
+    Accepts dicts too, so a finished JSONL can be re-summarized without a rerun:
+    `summarize([json.loads(l) for l in open(path)])`. A line whose keys don't
+    match the schema raises here rather than skewing the numbers silently.
+    """
+    results = [r if isinstance(r, Result) else Result(**r) for r in results]
     n = len(results)
     if not n:
         print("n=0")
         return None
 
-    unparsed = [r for r in results if r["pred"] is None]
-    scored = [r for r in results if r["correct"] is not None]
-    acc = sum(r["correct"] for r in scored) / len(scored) if scored else None
+    unparsed = [r for r in results if r.pred is None]
+    scored = [r for r in results if r.correct is not None]
+    acc = sum(r.correct for r in scored) / len(scored) if scored else None
 
     acc_str = f"{acc:.4f}" if acc is not None else "n/a (unlabeled)"
     print(f"n={n}  accuracy={acc_str}  unparsed={len(unparsed)} ({len(unparsed) / n:.2%})")
     for r in unparsed[:n_examples]:
-        print(f"  {r['qid']}: {r['raw']!r}")
+        print(f"  {r.qid}: {r.raw!r}")
     return acc
 
 
@@ -87,7 +144,7 @@ def run(
     use_transcript: bool = True,
     out_path: str | Path | None = None,
     resume: bool = True,
-) -> pd.DataFrame:
+) -> list[Result]:
     """
     Generate an answer for every row and score it against `answer_idx`.
 
@@ -101,13 +158,15 @@ def run(
         resume: with `out_path`, skip qids already present in that file.
 
     Returns:
-        DataFrame with columns video, qid, pred, gold, correct, raw. Videos that
-        fail to decode are skipped with a printed reason and produce no rows.
+        One `Result` per question answered this call -- on a resumed run that
+        excludes rows already in `out_path`, which remains the full record.
+        Videos that fail to decode are skipped with a printed reason and
+        produce no results. Pass the list to `to_frame` for analysis.
     """
     groups = group_by_video(rows)
 
     out_path = Path(out_path) if out_path else None
-    results: list[dict] = []
+    results: list[Result] = []
     if out_path and resume:
         skip = _done_qids(out_path)
         if skip:
@@ -139,30 +198,20 @@ def run(
                 batch = group[i : i + batch_size]
                 texts = vlm.answer(clip, batch, use_transcript=use_transcript)
 
-                batch_results = []
-                for r, text in zip(batch, texts):
-                    pred = parse(text)
-                    gold = r.get(Columns.ANSWER_IDX)
-                    gold = None if pd.isna(gold) else gold
-                    batch_results.append({
-                        "video": video_id,
-                        "qid": r[Columns.QID],
-                        "pred": pred,
-                        "gold": gold,
-                        "correct": None if gold is None else (pred is not None and pred == gold),
-                        "raw": text.strip(),
-                    })
+                batch_results = [
+                    Result.score(r, video_id, text) for r, text in zip(batch, texts)
+                ]
 
                 results.extend(batch_results)
                 if out_path:
                     with out_path.open("a") as f:
-                        for row in batch_results:
-                            f.write(json.dumps(row) + "\n")
+                        for result in batch_results:
+                            f.write(json.dumps(result.as_dict()) + "\n")
 
                 progress.update(len(batch))
-                scored = [r for r in results if r["correct"] is not None]
+                scored = [r for r in results if r.correct is not None]
                 if scored:
-                    running = sum(r["correct"] for r in scored) / len(scored)
+                    running = sum(r.correct for r in scored) / len(scored)
                     progress.set_postfix(acc=f"{running:.3f}")
         finally:
             del clip
@@ -170,4 +219,4 @@ def run(
 
     progress.close()
     summarize(results)
-    return pd.DataFrame(results, columns=RESULT_COLUMNS)
+    return results

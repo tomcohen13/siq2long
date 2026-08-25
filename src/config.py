@@ -4,7 +4,12 @@ from enum import StrEnum
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Anchored to this file, not the cwd, so imports behave the same from a notebook,
+# a script, or pytest.
+ROOT_DIR = Path(__file__).resolve().parents[1]
+
+load_dotenv(ROOT_DIR / ".env")
+
 
 class Datasets(StrEnum):
     SIQ2 = "siq2"
@@ -27,7 +32,6 @@ class Columns(StrEnum):
     # siq2-long specific
     ORACLE = "oracle_idx"
 
-ROOT_DIR = Path(os.path.abspath('../..'))
 DATASET_TO_DIR = {
 	Datasets.SIQ2: Path(os.getenv("PATH_TO_SIQ2", ROOT_DIR / "datasets/socialiq2/siq2/")),
 	Datasets.SIQ2LONG: Path(os.getenv("PATH_TO_SIQ2LONG", ROOT_DIR / "datasets/siq2long/")),
