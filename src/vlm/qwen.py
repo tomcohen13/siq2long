@@ -4,10 +4,14 @@ import torch
 from enum import StrEnum
 from transformers import AutoProcessor
 
-os.environ["FORCE_QWENVL_VIDEO_READER"] = "torchcodec"  # must precede the import below
-from qwen_vl_utils import process_vision_info
+from vlm.base import VLM  # imports config, so .env is loaded before we read it below
 
-from vlm.base import VLM
+# qwen_vl_utils resolves its video backend at import time, so this must precede it.
+# setdefault, not assignment: torchcodec needs its shared libs to link, and when they
+# don't (Colab), qwen_vl_utils falls back to torchvision.io.read_video -- which no
+# longer exists. Set FORCE_QWENVL_VIDEO_READER=decord in .env to escape that.
+os.environ.setdefault("FORCE_QWENVL_VIDEO_READER", "torchcodec")
+from qwen_vl_utils import process_vision_info
 
 class QwenModels(StrEnum):
     Qwen2_5VL7BInstruct = "Qwen/Qwen2.5-VL-7B-Instruct"

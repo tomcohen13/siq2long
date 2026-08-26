@@ -16,6 +16,7 @@ Requires `src` on the import path: `uv pip install -e .`, or PYTHONPATH=src.
 import argparse
 import inspect
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -25,13 +26,14 @@ from data.load import find_downloaded_files, load_qa
 from data.transcripts import load_transcripts
 from inference import run
 from logs import banner, setup_logging
-from vlm import InternVL3_8B, Qwen2_5VL, Qwen3VL, VideoLlama3
+from vlm import InternVL3_8B, LlavaNextVideo, Qwen2_5VL, Qwen3VL, VideoLlama3
 
 MODELS = {
     "qwen2.5-vl": Qwen2_5VL,
     "qwen3-vl": Qwen3VL,
     "videollama3": VideoLlama3,
     "internvl3": InternVL3_8B,
+    "llava-next-video": LlavaNextVideo,
 }
 
 log = logging.getLogger("run_eval")
@@ -56,6 +58,8 @@ def parse_args(argv=None):
     p.add_argument("--max-frames", type=int, default=128)
     p.add_argument("--max-new-tokens", type=int, default=32)
     p.add_argument("--max-batch-size", type=int)
+    p.add_argument("--num-frames", type=int,
+                   help="fixed frame budget, for backends trained on one (llava-next-video)")
     return p.parse_args(argv)
 
 
@@ -73,6 +77,26 @@ def git_revision() -> str:
         return f"{sha}-dirty" if dirty else sha
     except (subprocess.CalledProcessError, FileNotFoundError):
         return "unknown"
+
+
+def environment() -> str:
+    """
+    Versions of everything that can change a result, for the log.
+
+    The video decoder belongs here: which backend loads decides which frames the
+    model sees, and it has already differed between machines on this project.
+    """
+    import torch
+    import transformers
+
+    parts = [f"torch {torch.__version__}", f"transformers {transformers.__version__}"]
+    for name in ("torchcodec", "decord", "av"):
+        try:
+            parts.append(f"{name} {__import__(name).__version__}")
+        except (ImportError, AttributeError):
+            parts.append(f"{name} -")
+    reader = os.environ.get("FORCE_QWENVL_VIDEO_READER", "unset")
+    return f"{', '.join(parts)}, qwen reader={reader}"
 
 
 def run_name(args) -> str:
@@ -114,6 +138,7 @@ def build_model(args):
         "max_frames": args.max_frames,
         "max_new_tokens": args.max_new_tokens,
         "max_batch_size": args.max_batch_size,
+        "num_frames": args.num_frames,
     }
     wanted = {k: v for k, v in wanted.items() if v is not None}
 
@@ -146,6 +171,7 @@ def main(argv=None) -> int:
         "log": log_file,
         "revision": git_revision(),
         "resume": "no" if args.no_resume else "yes",
+        "environment": environment(),
     })
 
     try:
