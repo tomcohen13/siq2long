@@ -1,7 +1,6 @@
 __pycache__/
 notebooks/
 siq2/
-scripts/
 .env
 playground.ipynb
 CLAUDE.md

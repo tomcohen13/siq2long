@@ -25,10 +25,13 @@ to one. That is the accepted cost of exact-match dedup.
 
 import html
 import io
+import logging
 from pathlib import Path
 
 from config import Columns
 import webvtt
+
+logger = logging.getLogger(__name__)
 
 
 def _captions(vtt: str | Path):
@@ -75,12 +78,18 @@ def load_transcripts(records: list[dict]) -> dict[str, str]:
 	transcripts = {}
 	missing = []
 	for r in records:
+		# `vid` is bound before the try: a KeyError on the id itself would otherwise
+		# raise NameError inside the handler.
+		vid = r.get(Columns.VIDEO_ID, "<no vid_name>")
 		try:
-			vid: str = r[Columns.VIDEO_ID]
 			path = Path(r[Columns.TRANSCRIPT_PATH])
-			if path.is_file():
-				transcripts[vid] = to_text(path.read_text(errors="strict"))
-		except:
+			if not path.is_file():
+				missing.append(vid)  # absent file is a miss, not a silent skip
+				continue
+			transcripts[vid] = to_text(path.read_text(errors="strict"))
+		except Exception:
+			logger.exception("could not read transcript for %s", vid)
 			missing.append(vid)
-	print(f"Encountered {len(missing)} missing or erroring files while processing \n : {missing}")
+	if missing:
+		logger.warning("%d transcripts missing or unreadable, e.g. %s", len(missing), missing[:5])
 	return transcripts

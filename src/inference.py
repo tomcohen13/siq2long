@@ -18,6 +18,7 @@ for analysis.
 
 import gc
 import json
+import logging
 import re
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
@@ -28,6 +29,8 @@ from tqdm.auto import tqdm
 
 from config import Columns
 from vlm.base import VLM
+
+logger = logging.getLogger(__name__)
 
 DIGIT_RE = re.compile(r"[0-3]")
 
@@ -108,7 +111,7 @@ def summarize(results: list[Result | dict], n_examples: int = 5) -> float | None
     results = [r if isinstance(r, Result) else Result(**r) for r in results]
     n = len(results)
     if not n:
-        print("n=0")
+        logger.warning("nothing to summarize (n=0)")
         return None
 
     unparsed = [r for r in results if r.pred is None]
@@ -116,9 +119,16 @@ def summarize(results: list[Result | dict], n_examples: int = 5) -> float | None
     acc = sum(r.correct for r in scored) / len(scored) if scored else None
 
     acc_str = f"{acc:.4f}" if acc is not None else "n/a (unlabeled)"
-    print(f"n={n}  accuracy={acc_str}  unparsed={len(unparsed)} ({len(unparsed) / n:.2%})")
-    for r in unparsed[:n_examples]:
-        print(f"  {r.qid}: {r.raw!r}")
+    logger.info(
+        "n=%d  accuracy=%s  unparsed=%d (%.2f%%)",
+        n, acc_str, len(unparsed), 100 * len(unparsed) / n,
+    )
+    if unparsed:
+        # The completions themselves, since a high unparsed rate is almost always a
+        # prompt or max_new_tokens problem rather than a model capability one.
+        logger.warning("%d unparsed completions, first %d:", len(unparsed), min(n_examples, len(unparsed)))
+        for r in unparsed[:n_examples]:
+            logger.warning("  %s: %r", r.qid, r.raw)
     return acc
 
 
@@ -170,7 +180,7 @@ def run(
     if out_path and resume:
         skip = _done_qids(out_path)
         if skip:
-            print(f"resuming: skipping {len(skip)} completed questions")
+            logger.info("resuming from %s: skipping %d completed questions", out_path, len(skip))
             groups = {
                 vid: keep
                 for vid, group in groups.items()
@@ -189,7 +199,10 @@ def run(
                 transcripts.get(video_id, ""),
             )
         except Exception as e:
-            print(f"[skip] {video_id}: {type(e).__name__}: {e}")
+            # One line on the console even when dozens of clips fail; the traceback
+            # goes to the file handler, which keeps DEBUG.
+            logger.warning("skipping %s: %s: %s", video_id, type(e).__name__, e)
+            logger.debug("traceback for %s", video_id, exc_info=True)
             progress.update(len(group))
             continue
 
@@ -213,6 +226,11 @@ def run(
                 if scored:
                     running = sum(r.correct for r in scored) / len(scored)
                     progress.set_postfix(acc=f"{running:.3f}")
+                    # The bar is console-only; DEBUG leaves a progress trace in the file.
+                    logger.debug(
+                        "%s: %d/%d answered, running accuracy %.4f",
+                        video_id, len(results), total, running,
+                    )
         finally:
             del clip
             _flush_cuda()
