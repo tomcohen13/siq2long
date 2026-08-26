@@ -1,6 +1,7 @@
 """Regression tests for the prompt the models actually send."""
 
 from vlm.base import VLM
+from vlm.intern import InternVL3_8B
 from vlm.qwen import Qwen2_5VL, Qwen3VL
 from vlm.videollama import VideoLlama3
 from fakes import make_row
@@ -35,5 +36,12 @@ def test_render_question_uses_the_row_question():
 def test_batch_size_caps_are_declared():
     """The runner batches off these, so they must be set on the classes, not just the ABC."""
     assert VideoLlama3.max_batch_size == 1
-    for cls in (Qwen2_5VL, Qwen3VL):
+    for cls in (Qwen2_5VL, Qwen3VL, InternVL3_8B):
         assert cls.max_batch_size >= 1
+
+
+def test_render_question_is_shared_across_backends():
+    """Every backend must send byte-identical prompts, or the comparison is confounded."""
+    row = make_row("q1", "vidA")
+    prompts = {cls.render_question(row) for cls in (VLM, InternVL3_8B, Qwen2_5VL, Qwen3VL, VideoLlama3)}
+    assert len(prompts) == 1
