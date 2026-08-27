@@ -21,7 +21,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-from config import DATASET_TO_DIR, Columns, Datasets
+# Locate src/ relative to this file, so `python scripts/run_eval.py` works from any
+# cwd with no editable install and no PYTHONPATH. Notebook environments lose `%env`
+# on a runtime restart, and this script is the one thing that must always start.
+_SRC = Path(__file__).resolve().parents[1] / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from config import DATASET_TO_DIR, Columns, Datasets  # noqa: E402
 from data.load import find_downloaded_files, load_qa
 from data.transcripts import load_transcripts
 from inference import run
@@ -60,6 +67,9 @@ def parse_args(argv=None):
     p.add_argument("--max-batch-size", type=int)
     p.add_argument("--num-frames", type=int,
                    help="fixed frame budget, for backends trained on one (llava-next-video)")
+    p.add_argument("--question-first", action="store_true",
+                   help="put question and transcript before the video placeholder "
+                        "(LLaVA's card ordering); default is video first")
     return p.parse_args(argv)
 
 
@@ -101,7 +111,8 @@ def environment() -> str:
 
 def run_name(args) -> str:
     condition = "notx" if args.no_transcript else "tx"
-    stem = f"{args.model}_{args.dataset}_{args.split}_{condition}"
+    order = "_qfirst" if args.question_first else ""
+    stem = f"{args.model}_{args.dataset}_{args.split}_{condition}{order}"
     return f"{stem}_n{args.limit}" if args.limit else stem
 
 
@@ -139,6 +150,7 @@ def build_model(args):
         "max_new_tokens": args.max_new_tokens,
         "max_batch_size": args.max_batch_size,
         "num_frames": args.num_frames,
+        "question_first": args.question_first or None,  # None so it's only forwarded when set
     }
     wanted = {k: v for k, v in wanted.items() if v is not None}
 

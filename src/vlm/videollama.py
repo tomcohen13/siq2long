@@ -49,18 +49,19 @@ class VideoLlama3(VLM):
         return [self._answer_one(clip, row, use_transcript) for row in rows]
 
     def _answer_one(self, clip: dict, row: dict, use_transcript: bool) -> str:
-        content = [{
+        video = {
             "type": "video",
             "video": {
                 "video_path": clip["video_path"],
                 "fps": self.fps,
                 "max_frames": self.max_frames,
             },
-        }]
-        if use_transcript:
-            transcript = clip["transcript"]
-            content.append({"type": "text", "text": f"Transcript:\n{transcript}"})
-        content.append({"type": "text", "text": self.render_question(row)})
+        }
+        transcript = clip["transcript"] if use_transcript else ""
+        content = [
+            video if kind == "video" else {"type": "text", "text": value}
+            for kind, value in self.content_parts(row, transcript)
+        ]
 
         conversation = [
             # {"role": "system", "content": SYSTEM},

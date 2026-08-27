@@ -29,12 +29,14 @@ class InternVL3_8B(VLM):
         dtype=torch.bfloat16,
         load_in_4bit: bool = False,
         max_batch_size: int = 1,
+        question_first: bool = False,
     ):
         self.fps = fps
         self.max_frames = max_frames
         self.max_new_tokens = max_new_tokens
         self.dtype = dtype
         self.max_batch_size = max_batch_size
+        self.question_first = question_first
 
         # bf16 by default, unlike the HF examples: they quantize to fit small GPUs,
         # but running this model in NF4 while Qwen and VideoLLaMA3 run bf16 makes a
@@ -94,11 +96,13 @@ class InternVL3_8B(VLM):
         }
 
     def _content(self, clip: dict, row: dict, use_transcript: bool) -> list[dict]:
-        content = [{"type": "video", "path": clip["video_path"]}]
-        if use_transcript:
-            content.append({"type": "text", "text": f"Transcript:\n{clip['transcript']}"})
-        content.append({"type": "text", "text": self.render_question(row)})
-        return content
+        transcript = clip["transcript"] if use_transcript else ""
+        return [
+            {"type": "video", "path": clip["video_path"]}
+            if kind == "video"
+            else {"type": "text", "text": value}
+            for kind, value in self.content_parts(row, transcript)
+        ]
 
     @torch.inference_mode()
     def answer(self, clip: dict, rows: list[dict], use_transcript: bool = True) -> list[str]:

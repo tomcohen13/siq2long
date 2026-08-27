@@ -62,6 +62,7 @@ class QwenVLM(VLM):
         max_pixels: int = 448 * 448,
         dtype=torch.bfloat16,
         max_batch_size: int = 8,
+        question_first: bool = False,
     ):
 
         self.fps = fps
@@ -70,6 +71,7 @@ class QwenVLM(VLM):
         self.max_pixels = max_pixels
         self.dtype = dtype
         self.max_batch_size = max_batch_size
+        self.question_first = question_first
 
         self._load()
 
@@ -108,16 +110,17 @@ class QwenVLM(VLM):
 
     def _encode(self, clip, rows, use_transcript=True):
         """One decoded clip + its transcript, B questions -> a single left-padded batch."""
-        prefix = [clip["msg"]]
-        if use_transcript:
-            prefix.append({"type": "text", "text": f"Transcript:\n{clip['transcript']}"})
+        transcript = clip["transcript"] if use_transcript else ""
 
         texts = []
         for r in rows:
-            prompt = self.render_question(r)
+            content = [
+                clip["msg"] if kind == "video" else {"type": "text", "text": value}
+                for kind, value in self.content_parts(r, transcript)
+            ]
             texts.append(
                 self.processor.apply_chat_template(
-                    [{"role": "user", "content": prefix + [{"type": "text", "text": prompt}]}],
+                    [{"role": "user", "content": content}],
                     tokenize=False, add_generation_prompt=True,
                 )
             )

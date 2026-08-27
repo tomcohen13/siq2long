@@ -39,11 +39,13 @@ class LlavaNextVideo(VLM):
         max_new_tokens: int = 32,
         dtype=torch.bfloat16,
         max_batch_size: int = 1,
+        question_first: bool = False,
     ):
         self.num_frames = num_frames
         self.max_new_tokens = max_new_tokens
         self.dtype = dtype
         self.max_batch_size = max_batch_size
+        self.question_first = question_first
 
         self.model = self.attn = None
         for attn in ("flash_attention_2", "sdpa"):
@@ -86,11 +88,12 @@ class LlavaNextVideo(VLM):
 
         texts = []
         for row in rows:
+            transcript = clip["transcript"] if use_transcript else ""
             # A bare `{"type": "video"}` placeholder: the frames travel via `videos=`.
-            content = [{"type": "video"}]
-            if use_transcript:
-                content.append({"type": "text", "text": f"Transcript:\n{clip['transcript']}"})
-            content.append({"type": "text", "text": self.render_question(row)})
+            content = [
+                {"type": "video"} if kind == "video" else {"type": "text", "text": value}
+                for kind, value in self.content_parts(row, transcript)
+            ]
             texts.append(
                 self.processor.apply_chat_template(
                     [{"role": "user", "content": content}], add_generation_prompt=True
