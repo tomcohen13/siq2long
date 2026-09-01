@@ -1,10 +1,8 @@
 
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Hashable, Mapping
 
-from config import Columns
-
-def load_oracles(path_to_trims: str) -> Mapping[str, tuple]:
+def load_oracles(path_to_trims: str) -> dict[Hashable, dict[Hashable, Any]]:
     """
     Load SIQ2 oracles per video, computed as the absolute time range, in seconds,
     of the SIQ2 trimmed video within the full one.
@@ -13,18 +11,12 @@ def load_oracles(path_to_trims: str) -> Mapping[str, tuple]:
         path_to_trims: path to the original SocialIQ-2.0 trims.json file
         dataset: alternative to path, 
     """
-
-
     import pandas as pd
     trims_df = pd.read_json(path_to_trims, orient="index")
     trims_df.rename(columns={0: "start"}, inplace=True)
     trims_df["end"] = round(trims_df["start"] + 60, 5)
     trims_df["oracle"] = trims_df[["start", "end"]].apply(tuple, axis=1)
-    return (
-        trims_df[[Columns.VIDEO_ID, "oracle"]]
-        .set_index(Columns.VIDEO_ID)
-        .to_dict(orient="index")
-    )
+    return trims_df.to_dict(orient="index")
 
 
 def compute_segments_around_oracle(
@@ -40,15 +32,19 @@ def compute_segments_around_oracle(
         oracle: a list of start time and end time of the oracle
         full_duration: full duration (in seconds) of the video
         chunk_size: desired time range for each chunk
-        buffer_size: if the outermost chunks end up being within buffer_size seconds of start or end of video, 
-            absorb that into chunk
-    
+        buffer_size: if the outermost chunks end up being within buffer_size seconds of start or end of video,
+            absorb that into chunk. Never applied when the absorbing chunk would be the oracle --
+            the sliver is dropped instead, so the oracle's bounds always match the SIQ2 trim.
+
     Returns:
         chunks (list[list[float]])
         oracle_idx (int)
-    
+
     Example:
-        >> TODO
+        >>> compute_segments_around_oracle((127.11, 187.11), 200)
+        ([[0, 67.11], [67.11, 127.11], [127.11, 187.11], [187.11, 200]], 2)
+        >>> compute_segments_around_oracle((127.11, 187.11), 190)  # 2.89s tail, dropped
+        ([[0, 67.11], [67.11, 127.11], [127.11, 187.11]], 2)
     """
 
     chunks = []
@@ -77,13 +73,13 @@ def compute_segments_around_oracle(
         chunk_start = chunk_end
         chunk_end += chunk_size
 
-    # Merge a short tail into the last *post–ground-truth* chunk only. If the forward while never
-    # ran, chunks[-1] is still gt — do not extend that or the QA window would change.
-    if len(chunks) > oracle_idx + 1 and full_duration - chunk_start <= buffer_size:
-        chunks[-1][1] = full_duration
-    elif chunk_start < full_duration:
+    # apply buffer to remainder, unless last chunk is oracle.
+    remainder = full_duration - chunk_start
+    if remainder > buffer_size:
         chunks.append([chunk_start, full_duration])
-    
+    elif len(chunks) > oracle_idx + 1:
+        chunks[-1][1] = full_duration
+
     return chunks, oracle_idx
 
 

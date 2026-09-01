@@ -5,6 +5,8 @@ from pathlib import Path
 from config import DATASET_TO_DIR, Columns
 
 def load_qa(split: str, dataset: str) -> pd.DataFrame:
+	if dataset not in DATASET_TO_DIR:
+		raise ValueError(f"Invalid dataset specified, options are: {DATASET_TO_DIR.keys()}")
 	path = DATASET_TO_DIR.get(dataset) / "qa" / f"qa_{split}.json"
 	print("loading from %s...", path)
 	df = pd.read_json(path, lines=True)
