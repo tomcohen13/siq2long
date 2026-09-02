@@ -1,0 +1,109 @@
+"""Video probing and frame sampling."""
+
+import numpy as np
+import subprocess
+
+def get_duration(filename: str) -> float:
+    """Get duration of video file in seconds using ffprobe."""
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        filename,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        err = (result.stderr or "").strip() or "ffprobe failed with no stderr"
+        raise RuntimeError(f"ffprobe exited {result.returncode}: {err}")
+    raw = (result.stdout or "").strip()
+    if not raw:
+        raise RuntimeError("ffprobe returned empty duration")
+    return float(raw)
+
+
+def frame_indices(total_frames: int, num_frames: int) -> np.ndarray:
+    """
+    `num_frames` indices spread evenly over `[0, total_frames - 1]`, inclusive.
+
+    Rounded, not truncated. `np.linspace(..., dtype=int)` casts, which floors every
+    index and biases the whole sample toward the start of the clip -- subtly wrong in
+    a way that never raises. Asking for more frames than exist returns every frame
+    rather than padding, because padding hides a decode problem behind plausible input.
+    """
+    if total_frames <= 0:
+        raise ValueError(f"total_frames must be positive, got {total_frames}")
+    if num_frames <= 0:
+        raise ValueError(f"num_frames must be positive, got {num_frames}")
+
+    n = min(num_frames, total_frames)
+    return np.linspace(0, total_frames - 1, n).round().astype(int)
+
+
+def window_frame_indices(
+    metadata, num_frames: int, start: float | None = None, end: float | None = None
+) -> np.ndarray:
+    """
+    `num_frames` indices over the `[start, end]` second window, or the whole video.
+
+    Converts seconds to a frame range using the video's own fps and then defers to
+    `frame_indices`, so rounding behaves identically for a chunk and for a full video.
+    `end` past the last frame clamps: a video's final chunk legitimately runs to the
+    duration ffprobe reported, which can round a frame or two past the frame count.
+
+    Kept apart from decoding so it can be tested without a video file, and because the
+    two guards below are the ones that matter -- pyav takes `total_num_frames` from
+    container metadata, which has been wrong on this dataset before. Failing here beats
+    silently sampling a bogus range.
+    """
+    if (start is None) != (end is None):
+        raise ValueError("pass both `start` and `end`, or neither")
+
+    total = metadata.total_num_frames
+    if not total or total <= 0:
+        raise RuntimeError(f"video reports {total} frames; refusing to sample")
+    if start is None:
+        return frame_indices(total, num_frames)
+
+    fps = metadata.fps
+    if not fps:
+        raise RuntimeError("video reports no frame rate; cannot convert seconds to frames")
+    lo = max(0, round(start * fps))
+    hi = min(total - 1, round(end * fps) - 1)
+    if hi < lo:
+        raise ValueError(f"empty frame range for window [{start}, {end}] at {fps} fps")
+    return frame_indices(hi - lo + 1, num_frames) + lo
+
+
+def sample_frames(
+    video_path: str,
+    num_frames: int,
+    start: float | None = None,
+    end: float | None = None,
+    backend: str = "pyav",
+) -> np.ndarray:
+    """
+    Decode `num_frames` evenly spaced frames as a [T, H, W, C] uint8 array.
+
+    With `start`/`end` the frames come from that second-window only, and nothing is cut
+    on disk -- the window becomes a set of frame indices and just those are decoded. That
+    is what lets a chunked video be encoded without materializing clips, whose keyframe-
+    snapped boundaries would move the oracle window off the SIQ2 trim.
+
+    `transformers.video_utils.load_video` rather than decord, which publishes no arm64
+    macOS wheel; load_video's pyav backend installs everywhere and accepts the
+    `sample_indices_fn` this needs. The array form matters downstream too -- transformers
+    skips its own video decoding when handed frames.
+    """
+    from transformers.video_utils import load_video  # lazy: heavy import
+
+    def indices(metadata, **kwargs):
+        return window_frame_indices(metadata, num_frames, start, end)
+
+    frames, _ = load_video(str(video_path), sample_indices_fn=indices, backend=backend)
+    if len(frames) == 0:
+        raise RuntimeError(f"decoded 0 frames from {video_path}")
+    return frames

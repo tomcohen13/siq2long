@@ -5,7 +5,7 @@ import logging
 import torch
 from transformers import AutoProcessor, LlavaNextVideoForConditionalGeneration
 
-from data.utils import sample_frames
+from data.videos import sample_frames
 from vlm.base import VLM
 
 logger = logging.getLogger(__name__)

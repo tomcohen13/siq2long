@@ -3,7 +3,7 @@
 import torch
 from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
 
-from data.utils import get_duration
+from data.videos import get_duration
 from vlm.base import VLM
 
 

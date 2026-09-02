@@ -5,15 +5,12 @@ description = "Retrieval-first video QA on Social-IQ 2.0: oracle-clip finding an
 requires-python = ">=3.12"
 dependencies = [
     "accelerate",     # device_map="auto"
-    # data.utils.sample_frames. Marker because decord 0.6.0 ships only manylinux2010_x86_64
-    # and win_amd64 wheels -- nothing for macOS, and the eva-decord fork has no arm64 build
-    # either. Frame *decoding* therefore happens on the Linux box only; sample_frames imports
-    # decord lazily so the rest of the package stays importable on a laptop without it.
-    "decord ; sys_platform != 'darwin'",
+    "av",             # load_video's default backend, used by data.videos.sample_frames
     "matplotlib",     # plots
-    "numpy",          # imported directly by data.utils, not just via torch/pandas
+    "numpy",          # imported directly by data.videos, not just via torch/pandas
     "pandas",
     "python-dotenv",
+    "timm",           # PeVideoModel's vision tower loads through TimmWrapperConfig
     "qwen-vl-utils",
     "torch",
     "torchcodec",     # FORCE_QWENVL_VIDEO_READER
