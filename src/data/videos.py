@@ -107,3 +107,41 @@ def sample_frames(
     if len(frames) == 0:
         raise RuntimeError(f"decoded 0 frames from {video_path}")
     return frames
+
+
+def sample_windows(
+    video_path: str,
+    windows: list[list[float]],
+    num_frames: int,
+    backend: str = "pyav",
+) -> list[np.ndarray]:
+    """
+    Decode `num_frames` from each `[start, end]` window, in one pass over the file.
+
+    PyAV reads forward from the start instead of seeking, so decoding windows one at a
+    time re-reads the whole file each time -- about 4x slower here, for identical frames.
+
+    Windows must be ascending and non-overlapping, as the chunker emits them. Overlapping
+    ones come back short, since one pass returns frames in file order and drops repeats;
+    the count check catches that rather than letting rows misalign.
+    """
+    from transformers.video_utils import load_video  # lazy: heavy import
+
+    sizes: list[int] = []
+
+    def indices(metadata, **kwargs):
+        per_window = [window_frame_indices(metadata, num_frames, s, e) for s, e in windows]
+        sizes[:] = [len(i) for i in per_window]
+        return np.concatenate(per_window)
+
+    frames, _ = load_video(str(video_path), sample_indices_fn=indices, backend=backend)
+    if len(frames) != sum(sizes):
+        raise RuntimeError(
+            f"decoded {len(frames)} frames for {sum(sizes)} requested from {video_path}"
+        )
+
+    out, start_row = [], 0
+    for size in sizes:
+        out.append(frames[start_row : start_row + size])
+        start_row += size
+    return out

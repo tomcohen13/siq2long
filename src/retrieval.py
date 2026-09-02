@@ -21,7 +21,7 @@ from tqdm import tqdm
 
 from config import ANSWER_KEYS, Columns
 from data.transcripts import split_transcript_by_ranges
-from data.videos import sample_frames
+from data.videos import sample_windows
 from encoders.base import DualEncoder
 
 logger = logging.getLogger(__name__)
@@ -66,23 +66,17 @@ def encode_chunks(
         chunks: list of `[start, end]` ranges in seconds
     """
     texts = split_transcript_by_ranges(transcript_path, chunks)
+    frames = sample_windows(video_path, chunks, encoder.num_frames)
 
     video_embeds = []
     text_embeds = []
 
-    for batch in _batches(list(zip(chunks, texts)), encoder.batch_size):
-        batch_frames = []
-        batch_texts = []
-        for [s, e], t in batch:
-            chunk_frames = sample_frames(video_path, encoder.num_frames, start=s, end=e)
-            batch_frames.append(chunk_frames)
-            batch_texts.append(t)
+    for batch_frames, batch_texts in zip(
+        _batches(frames, encoder.batch_size), _batches(texts, encoder.batch_size)
+    ):
         # encode and move to CPU
-        batch_video_embeds = encoder.encode_videos(batch_frames).cpu()
-        batch_text_embeds = encoder.encode_texts(batch_texts).cpu()
-
-        video_embeds.append(batch_video_embeds)
-        text_embeds.append(batch_text_embeds)
+        video_embeds.append(encoder.encode_videos(batch_frames).cpu())
+        text_embeds.append(encoder.encode_texts(batch_texts).cpu())
 
     video_embeds, text_embeds = torch.cat(video_embeds), torch.cat(text_embeds)
     # A row per chunk in both modalities, or every downstream lookup by chunk index is

@@ -18,13 +18,15 @@ import logging
 import sys
 from pathlib import Path
 
+import torch
+
 # Locate src/ relative to this file, so `python scripts/encode_chunks.py` works from any
 # cwd with no editable install and no PYTHONPATH.
 _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from config import DATASET_TO_DIR, Datasets  # noqa: E402
+from config import DATASET_TO_DIR, Columns, Datasets  # noqa: E402
 from data.load import find_downloaded_files, load_qa  # noqa: E402
 from data.manifest import load_manifest  # noqa: E402
 from encoders import PEVideoEncoder, XCLIPEncoder  # noqa: E402
@@ -34,6 +36,15 @@ from retrieval import encode  # noqa: E402
 ENCODERS = {"xclip": XCLIPEncoder, "pe-video": PEVideoEncoder}
 
 log = logging.getLogger("encode_chunks")
+
+
+def best_device() -> str:
+    """CUDA, else Apple's MPS, else CPU. MPS matches CPU to 1e-6 here and runs ~2x faster."""
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 
 
 def parse_args(argv=None):
@@ -46,6 +57,7 @@ def parse_args(argv=None):
     p.add_argument("--manifest", type=Path, help="default: <dataset-dir>/video_chunks.json")
     p.add_argument("--out", type=Path, help="default: <dataset-dir>/embeddings/<encoder>_<split>.pt")
     p.add_argument("--limit", type=int, help="first N videos only, for smoke tests")
+    p.add_argument("--device", choices=["cpu", "mps", "cuda"], help="default: best available")
     p.add_argument("--batch-size", type=int, help="override the encoder's default")
     p.add_argument("--force", action="store_true", help="overwrite an existing cache")
     p.add_argument("--log-file", type=Path)
@@ -77,11 +89,16 @@ def main(argv=None) -> int:
         return 1
 
     try:
-        manifest = load_manifest(manifest_path)
         qa = load_qa(split=args.split, dataset=Datasets.SIQ2LONG)
+        # Chunks belong to videos, not to splits, so the manifest covers every video in
+        # the dataset. Narrow it to this split here -- `encode` filters only the questions,
+        # so an unnarrowed manifest encodes all 748 videos to answer one split's 778.
+        split_vids = set(qa[Columns.VIDEO_ID])
+        manifest = {v: c for v, c in load_manifest(manifest_path).items() if v in split_vids}
         files = find_downloaded_files(args.dataset_dir, to_dataframe=True)
+        log.info("%s covers %d of the manifest's videos", args.split, len(manifest))
 
-        encoder = ENCODERS[args.encoder]()
+        encoder = ENCODERS[args.encoder]().to(args.device or best_device())
         encoder.eval()
         if args.batch_size:
             encoder.batch_size = args.batch_size
