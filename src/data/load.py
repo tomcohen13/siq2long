@@ -1,14 +1,18 @@
 
+import logging
+
 import pandas as pd
 
 from pathlib import Path
 from config import DATASET_TO_DIR, Columns
 
+logger = logging.getLogger(__name__)
+
 def load_qa(split: str, dataset: str) -> pd.DataFrame:
 	if dataset not in DATASET_TO_DIR:
 		raise ValueError(f"Invalid dataset specified, options are: {DATASET_TO_DIR.keys()}")
 	path = DATASET_TO_DIR.get(dataset) / "qa" / f"qa_{split}.json"
-	print("loading from %s...", path)
+	logger.info("loading %s", path)
 	df = pd.read_json(path, lines=True)
 	return df
 

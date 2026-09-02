@@ -37,7 +37,7 @@ def parse_args(argv=None):
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     p.add_argument("--dataset-dir", type=Path, default=DATASET_TO_DIR[Datasets.SIQ2LONG])
-    p.add_argument("--trims", type=Path, default=DATASET_TO_DIR[Datasets.SIQ2] / "trims.json")
+    p.add_argument("--trims", type=Path, help="default: <dataset-dir>/trims.json")
     p.add_argument("--out", type=Path, help="default: <dataset-dir>/video_chunks.json")
     p.add_argument("--max-chunks", type=int, default=MAX_CHUNKS)
     p.add_argument("--min-chunks", type=int, default=MIN_CHUNKS)
@@ -53,7 +53,7 @@ def report_coverage(manifest: dict) -> None:
     """How many QA rows survive per split -- the shrinkage that makes tables disagree."""
     for split in ("train", "val", "test"):
         try:
-            qa = load_qa(split, Datasets.SIQ2)
+            qa = load_qa(split, Datasets.SIQ2LONG)
         except Exception:
             log.warning("could not load the %s split; skipping its coverage", split)
             continue
@@ -72,13 +72,14 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     setup_logging(args.log_file, args.log_level)
     out_path = args.out or args.dataset_dir / "video_chunks.json"
+    trims_path = args.trims or args.dataset_dir / "trims.json"
 
     banner(
         log,
         "build_manifest",
         {
             "dataset_dir": args.dataset_dir,
-            "trims": args.trims,
+            "trims": trims_path,
             "out": out_path,
             "chunks": f"{args.min_chunks}..{args.max_chunks} of {args.chunk_size}s",
             "buffer": f"{args.buffer_size}s",
@@ -91,8 +92,8 @@ def main(argv=None) -> int:
 
     try:
         manifest, stats = build_manifest(
-            args.dataset_dir,
-            args.trims,
+            dataset_dir=args.dataset_dir,
+            trims_path=trims_path,
             max_chunks=args.max_chunks,
             min_chunks=args.min_chunks,
             chunk_size=args.chunk_size,
