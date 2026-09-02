@@ -67,15 +67,17 @@ class DualEncoder(torch.nn.Module, ABC):
         """
         return queries @ candidates.T
 
-    def save(self, path: str | Path, **tensors: torch.Tensor) -> None:
+    def save(self, path: str | Path, meta: dict[str, Any] | None = None, **tensors) -> None:
         """
         Write named embedding tensors to `path`, stamped with what produced them.
 
         The stamp is the point. Embeddings are cached so every scoring variant -- fused
-        or per-modality, question-only or question-plus-answers -- can be recomputed
-        without touching video again. Two runs of that analysis are only comparable if
-        the file says which checkpoint and frame count it came from, and swapping
-        backbones means there will be several such files side by side.
+        or per-modality, question-only or question-plus-answers, same-video or cross-video
+        distractors -- can be recomputed without touching video again. Two runs of that
+        analysis are only comparable if the file says which checkpoint and frame count it
+        came from, and swapping backbones means there will be several such files side by
+        side. `meta` carries the non-tensor payload that makes the rows addressable: which
+        (video, chunk) each row is, and the chunk transcripts BM25 needs.
 
         Tensors are detached and moved to CPU on the way out, so a saved cache never
         carries a CUDA device or an autograd graph into whatever loads it next.
@@ -86,6 +88,7 @@ class DualEncoder(torch.nn.Module, ABC):
             {
                 "checkpoint": self.checkpoint,
                 "num_frames": self.num_frames,
+                "meta": meta or {},
                 "tensors": {name: t.detach().cpu() for name, t in tensors.items()},
             },
             path,
@@ -93,5 +96,10 @@ class DualEncoder(torch.nn.Module, ABC):
 
     @staticmethod
     def load(path: str | Path) -> dict[str, Any]:
-        """Read back a `save` bundle: {"checkpoint", "num_frames", "tensors"}."""
-        return torch.load(Path(path), map_location="cpu", weights_only=True)
+        """
+        Read back a `save` bundle: {"checkpoint", "num_frames", "meta", "tensors"}.
+
+        `weights_only=False` because `meta` holds plain Python -- ids and transcripts --
+        not just tensors. Only ever point this at a cache this repo wrote.
+        """
+        return torch.load(Path(path), map_location="cpu", weights_only=False)
