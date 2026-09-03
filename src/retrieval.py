@@ -128,9 +128,9 @@ def encode(
         try:
             v_emb, t_emb, texts = encode_chunks(
                 encoder,
-                paths.loc[vid, Columns.VIDEO_PATH],
-                paths.loc[vid, Columns.TRANSCRIPT_PATH],
-                chunks,
+                video_path=paths.loc[vid, Columns.VIDEO_PATH],
+                transcript_path=paths.loc[vid, Columns.TRANSCRIPT_PATH],
+                chunks=chunks,
             )
         except Exception:
             logger.exception("could not encode %s; skipping", vid)

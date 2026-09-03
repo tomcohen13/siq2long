@@ -7,8 +7,15 @@ results and a log of how it was produced, including the git commit. Re-running
 the same command resumes from the JSONL, so a preempted instance costs only the
 batch in flight.
 
-    python scripts/run_eval.py --model qwen3-vl --split val --limit 12
-    python scripts/run_eval.py --model internvl3 --split val --no-transcript
+    python scripts/run_eval.py --model qwen3-vl --dataset siq2long --split val --limit 12
+    python scripts/run_eval.py --model internvl3 --dataset siq2 --split val --no-transcript
+
+Pass --embeddings to answer each question from one retrieved chunk instead of the whole
+video. --condition gold is the ceiling a perfect retriever reaches, top1 is what the
+retriever returns, and the gap between them is what retrieval failure costs:
+
+    python scripts/run_eval.py --model qwen3-vl --dataset siq2long --split val \
+        --embeddings outputs/embeddings/xclip_val.pt --condition top1
 
 Requires `src` on the import path: `uv pip install -e .`, or PYTHONPATH=src.
 """
@@ -21,6 +28,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tqdm.auto import tqdm
+
 # Locate src/ relative to this file, so `python scripts/run_eval.py` works from any
 # cwd with no editable install and no PYTHONPATH. Notebook environments lose `%env`
 # on a runtime restart, and this script is the one thing that must always start.
@@ -31,8 +40,11 @@ if str(_SRC) not in sys.path:
 from config import DATASET_TO_DIR, Columns, Datasets  # noqa: E402
 from data.load import find_downloaded_files, load_qa
 from data.transcripts import load_transcripts
+from data.videos import slice_video
+from encoders.base import DualEncoder
 from inference import run
 from logs import banner, setup_logging
+from scoring import select_chunks
 from vlm import InternVL3_8B, LlavaNextVideo, Qwen2_5VL, Qwen3VL, VideoLlama3
 
 MODELS = {
@@ -49,10 +61,17 @@ log = logging.getLogger("run_eval")
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--model", required=True, choices=sorted(MODELS))
-    p.add_argument("--dataset", default=Datasets.SIQ2, choices=[d.value for d in Datasets])
+    p.add_argument("--dataset", required=True, choices=[d.value for d in Datasets])
     p.add_argument("--split", default="val", choices=["train", "val", "test"])
     p.add_argument("--no-transcript", action="store_true", help="video only, no transcript in the prompt")
     p.add_argument("--limit", type=int, help="first N questions only, for smoke tests")
+
+    # Chunk mode: answer each question from one retrieved chunk instead of the whole video.
+    p.add_argument("--embeddings", type=Path, help="embedding cache from encode_chunks.py")
+    p.add_argument("--condition", default="gold", choices=["gold", "top1", "random", "prior"],
+                   help="which chunk answers each question (with --embeddings)")
+    p.add_argument("--chunks-dir", type=Path, default=Path("outputs/chunks"),
+                   help="where cut video chunks are cached")
 
     p.add_argument("--out", type=Path, help="results JSONL (default: outputs/<run>.jsonl)")
     p.add_argument("--log-file", type=Path, help="log file (default: alongside --out)")
@@ -112,8 +131,58 @@ def environment() -> str:
 def run_name(args) -> str:
     condition = "notx" if args.no_transcript else "tx"
     order = "_qfirst" if args.question_first else ""
-    stem = f"{args.model}_{args.dataset}_{args.split}_{condition}{order}"
+    # The retrieval condition is part of the identity: gold and top1 runs differ only in
+    # which chunk answered, and sharing an output file would silently resume across them.
+    chunks = f"_{args.condition}" if args.embeddings else ""
+    stem = f"{args.model}_{args.dataset}_{args.split}_{condition}{order}{chunks}"
     return f"{stem}_n{args.limit}" if args.limit else stem
+
+
+def load_chunk_rows(args):
+    """
+    QA rows answered from a single chunk each, with that chunk cut to its own file.
+
+    The end-to-end half of the paper: instead of handing a model the whole video, hand it
+    one 60s window and see what the answer costs. `--condition gold` is the ceiling a
+    perfect retriever reaches, `top1` is what the retriever actually returns, and the gap
+    between them is the price of retrieval failure.
+
+    Each row's `vid_name` becomes `"{vid}#{chunk}"`. That is what lets the rest of the
+    pipeline stay untouched: `inference.run` groups by `vid_name` to decode each chunk once
+    and looks up `transcripts[vid_name]`, so keying on the chunk gives correct grouping,
+    the chunk's own transcript, and a results file that records which chunk answered.
+
+    Chunks have to exist on disk because the VLM backends take a path and decode it whole,
+    unlike the encoders, which read frame indices straight out of the source.
+    """
+    bundle = DualEncoder.load(args.embeddings)
+    meta = bundle["meta"]
+    picks = select_chunks(bundle, args.condition)
+    if args.limit:
+        picks = picks[: args.limit]
+
+    qa = load_qa(args.split, args.dataset).set_index(Columns.QID)
+    files = find_downloaded_files(DATASET_TO_DIR[args.dataset], to_dataframe=True)
+    files = files.set_index(Columns.VIDEO_ID)
+    texts = {tuple(cid): t for cid, t in zip(meta["chunk_ids"], meta["chunk_texts"])}
+
+    log.info(
+        "%s: %d questions over %d distinct chunks (cache: %s)",
+        args.condition, len(picks), len({(v, i) for _, v, i in picks}), bundle["checkpoint"],
+    )
+
+    rows, transcripts = [], {}
+    for qid, vid, i in tqdm(picks, desc="chunks", unit="q"):
+        start, end = meta["chunks"][vid][i]
+        chunk_id = f"{vid}#{i}"
+        dest = args.chunks_dir / f"{vid}_{i}.mp4"
+        slice_video(files.loc[vid, Columns.VIDEO_PATH], start, end, dest)
+        rows.append(
+            qa.loc[qid].to_dict()
+            | {Columns.QID: qid, Columns.VIDEO_ID: chunk_id, Columns.VIDEO_PATH: dest}
+        )
+        transcripts[chunk_id] = texts[(vid, i)]
+    return rows, transcripts
 
 
 def load_rows(dataset: str, split: str, limit: int | None):
@@ -177,6 +246,7 @@ def main(argv=None) -> int:
     banner(log, f"siq2long eval: {name}", {
         "model": args.model,
         "dataset": f"{args.dataset} ({args.split})",
+        "chunks": f"{args.condition} from {args.embeddings}" if args.embeddings else "whole video",
         "transcript": "no" if args.no_transcript else "yes",
         "fps / frames": f"{args.fps} / {args.max_frames}",
         "results": out_path,
@@ -187,7 +257,10 @@ def main(argv=None) -> int:
     })
 
     try:
-        rows, transcripts = load_rows(args.dataset, args.split, args.limit)
+        if args.embeddings:
+            rows, transcripts = load_chunk_rows(args)
+        else:
+            rows, transcripts = load_rows(args.dataset, args.split, args.limit)
         model = build_model(args)
         results = run(
             model,

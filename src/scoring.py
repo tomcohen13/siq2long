@@ -7,7 +7,7 @@ own video, which is the task: find the oracle inside one long video, not across 
 """
 
 import logging
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import numpy as np
 import torch
@@ -66,6 +66,55 @@ def oracle_ranks(bundle: dict, representation: str, query: str) -> tuple[np.ndar
         ranks.append(int((scores > oracle).sum() + (scores == oracle).sum() - 1))
         pools.append(len(idx))
     return np.array(ranks), np.array(pools)
+
+
+def select_chunks(
+    bundle: dict,
+    condition: str,
+    representation: str = "fused",
+    query: str = "question+options",
+    seed: int = 0,
+) -> list[tuple[str, str, int]]:
+    """
+    Which chunk each question should be answered from, as `(qid, vid, chunk_idx)`.
+
+    The qid rides along rather than leaving the caller to zip against `meta["qids"]`:
+    downstream this becomes one QA row per entry, and a silent off-by-one there would
+    answer every question from someone else's video without anything looking wrong.
+
+    The conditions are the rows of the end-to-end table. `gold` is the upper bound a
+    perfect retriever would reach; `top1` is what the retriever actually returns; `random`
+    and `prior` are the floors the retrieval numbers are measured against, carried through
+    to QA so the same reference frame holds on both halves of the paper.
+
+    `prior` predicts the modal oracle position, clamped to each video's own chunk count --
+    the trivial heuristic that beats every encoder configuration on retrieval.
+    """
+    meta, tensors = bundle["meta"], bundle["tensors"]
+    rows = rows_by_video(meta["chunk_ids"])
+    rng = np.random.default_rng(seed)
+
+    if condition == "top1":
+        chunks = chunk_matrix(tensors, representation)
+        queries = tensors[QUERIES[query]]
+
+    modal = Counter(meta["oracle_idx"][v] for v in meta["query_vid"]).most_common(1)[0][0]
+
+    out = []
+    for qi, (qid, vid) in enumerate(zip(meta["qids"], meta["query_vid"], strict=True)):
+        idx = rows[vid]
+        if condition == "gold":
+            pick = meta["oracle_idx"][vid]
+        elif condition == "top1":
+            pick = int((queries[qi] @ chunks[idx].T).argmax())
+        elif condition == "random":
+            pick = int(rng.integers(len(idx)))
+        elif condition == "prior":
+            pick = min(modal, len(idx) - 1)
+        else:
+            raise ValueError(f"unknown condition {condition!r}")
+        out.append((qid, vid, pick))
+    return out
 
 
 def metrics(ranks: np.ndarray, pools: np.ndarray) -> dict[str, float]:

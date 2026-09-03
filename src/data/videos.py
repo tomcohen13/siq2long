@@ -1,7 +1,9 @@
 """Video probing and frame sampling."""
 
-import numpy as np
 import subprocess
+from pathlib import Path
+
+import numpy as np
 
 def get_duration(filename: str) -> float:
     """Get duration of video file in seconds using ffprobe."""
@@ -145,3 +147,37 @@ def sample_windows(
         out.append(frames[start_row : start_row + size])
         start_row += size
     return out
+
+
+def slice_video(video_path: str, start: float, end: float, dest: str | Path, crf: int = 18) -> Path:
+    """
+    Write `[start, end]` to its own file, re-encoded. Returns `dest`, reusing it if present.
+
+    Only the VLM path needs this. The encoders read frame indices straight out of the
+    source, but the VLM backends take a video *path* and decode it whole, so a chunk has
+    to exist as a file before one can answer from it.
+
+    Re-encoded rather than stream-copied because `-c copy` snaps the cut to the nearest
+    keyframe -- measured up to 4.4s of drift on this dataset, which would move the oracle
+    window off the SIQ2 trim it is defined by. At crf 18 the second generation is visually
+    near-lossless and costs about 0.7s per chunk. Audio is dropped: none of the backends
+    listen to it.
+    """
+    dest = Path(dest)
+    if dest.exists():
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    tmp = dest.with_suffix(".partial.mp4")  # never leave a truncated chunk behind a cache hit
+    cmd = [
+        "ffmpeg", "-nostdin", "-v", "error", "-y",
+        "-ss", f"{start:.3f}", "-i", str(video_path), "-t", f"{end - start:.3f}",
+        "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", str(crf),
+        str(tmp),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"ffmpeg exited {result.returncode} cutting {video_path}: {result.stderr.strip()}")
+    tmp.rename(dest)
+    return dest
