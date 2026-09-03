@@ -166,7 +166,10 @@ def load_chunk_rows(args):
     if args.limit:
         picks = picks[: args.limit]
 
-    qa = load_qa(args.split, args.dataset).set_index(Columns.QID)
+    # Deduplicated before indexing: a repeated qid makes `.loc` return a DataFrame rather
+    # than a row, `.to_dict()` then nests every field under it, and the first symptom is
+    # `int(gold)` failing on a dict several hundred questions into the run.
+    qa = load_qa(args.split, args.dataset).drop_duplicates(Columns.QID).set_index(Columns.QID)
     files = find_downloaded_files(DATASET_TO_DIR[args.dataset], to_dataframe=True)
     files = files.set_index(Columns.VIDEO_ID)
     texts = {tuple(cid): t for cid, t in zip(meta["chunk_ids"], meta["chunk_texts"])}
