@@ -27,6 +27,25 @@ from encoders.base import DualEncoder, DualEncoderOutput
 logger = logging.getLogger(__name__)
 
 
+class ChunkEncoding(DualEncoderOutput):
+    """One video's chunks in both modalities, plus the text those transcripts came from."""
+
+    texts: list[str]
+
+
+class ArtifactTensors(DualEncoderOutput):
+    """
+    Every tensor an encode run produces: the chunk side and the query side.
+
+    Chunk embeddings are one row per `(video, chunk)`; query embeddings are one row per
+    question, in both query forms. Kept apart so scoring can pair any representation with
+    any query form without re-encoding.
+    """
+
+    query_q: torch.Tensor
+    query_qa: torch.Tensor
+
+
 def render_query(row: dict, with_options: bool) -> str:
     """
     The retrieval query for one question.
@@ -51,7 +70,7 @@ def encode_chunks(
     video_path: Path,
     transcript_path: Path,
     chunks: list[list[float]]
-) -> tuple[torch.Tensor, torch.Tensor, list[str]]:
+) -> ChunkEncoding:
     """
     Encode one video's chunks in both modalities.
 
@@ -78,15 +97,16 @@ def encode_chunks(
         video_embeds.append(encoder.encode_videos(batch_frames).cpu())
         text_embeds.append(encoder.encode_texts(batch_texts).cpu())
 
-    # Should be one row per chunk in both modalities, complain otherwise.
-    if not len(video_embeds) == len(text_embeds) == len(chunks):
+    video, text = torch.cat(video_embeds), torch.cat(text_embeds)
+    # One row per chunk in both modalities, complain otherwise.
+    if not len(video) == len(text) == len(chunks):
         raise RuntimeError(
-            f"encoded {len(video_embeds)} video and {len(text_embeds)} text rows "
+            f"encoded {len(video)} video and {len(text)} text rows "
             f"for {len(chunks)} chunks of {video_path}"
         )
-    out: DualEncoderOutput = {
-        "video_embeddings": torch.cat(video_embeds),
-        "text_embeddings": torch.cat(text_embeds),
+    out: ChunkEncoding = {
+        "video_embeddings": video,
+        "text_embeddings": text,
         "texts": texts,
     }
     return out
@@ -98,7 +118,7 @@ def encode(
     qa: pd.DataFrame,
     files: pd.DataFrame,
     limit: int | None = None,
-) -> tuple[DualEncoderOutput, dict]:
+) -> tuple[ArtifactTensors, dict]:
     """
     Encode the chunks of every manifest video, and every question asked about them.
 
@@ -157,7 +177,7 @@ def encode(
             [encoder.encode_texts(b).cpu() for b in _batches(texts, encoder.batch_size)]
         )
 
-    tensors: DualEncoderOutput = {
+    tensors: ArtifactTensors = {
         "video_embeddings": torch.cat(video_embs),
         "text_embeddings": torch.cat(text_embs),
         **queries,
