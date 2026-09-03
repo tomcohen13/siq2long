@@ -44,7 +44,13 @@ class PEVideoEncoder(DualEncoder):
         super().__init__()
         self.checkpoint = checkpoint
         self.processor = AutoProcessor.from_pretrained(checkpoint)
-        self.model = PeVideoModel.from_pretrained(checkpoint)
+        self.model, info = PeVideoModel.from_pretrained(checkpoint, output_loading_info=True)
+        # pe-av-large is the audio-visual release: its tensors are named video_model.* and
+        # video_plus_text_head.*, this class builds video_encoder/video_head, and there is
+        # no conversion mapping. If they don't meet, from_pretrained invents the missing
+        # weights and only logs it. Unexpected keys are fine -- the audio tower has no home.
+        if info["missing_keys"]:
+            raise RuntimeError(f"{checkpoint} left weights uninitialized: {info['missing_keys'][:5]}")
         self.model.requires_grad_(False)
         self.num_frames = self.NUM_FRAMES
 
