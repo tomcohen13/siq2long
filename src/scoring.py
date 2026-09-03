@@ -27,6 +27,62 @@ REPRESENTATIONS = ("video", "transcript", "fused")
 #: setting, but they carry content the bare question does not, so both are reported.
 QUERIES = {"question": "query_q", "question+options": "query_qa"}
 
+#: Where the distractors come from. `within` is the task; `cross` is the control.
+POOL_TYPES = ("within", "cross")
+
+
+def question_pools(
+    meta: dict, pool_type: Literal[*POOL_TYPES] = "within", seed: int = 0
+) -> list[tuple[list[int], int]]:
+    """
+    Per question, the chunk rows that compete and which of them is the oracle.
+
+    `within` is the task: the oracle against the other minutes of its own video. `cross`
+    is the control: the oracle against the same *number* of chunks drawn at random from
+    other videos. Pool size is matched so the random floor is unchanged and the two differ
+    in one thing only -- whether the distractors come from the same video.
+
+    Both values are row indices into the chunk tensors, so callers never have to know how
+    a pool was built.
+
+    Args:
+        meta: an artifact's `meta`, for `chunk_ids`, `query_vid` and `oracle_idx`.
+        pool_type: `"within"` for same-video distractors, `"cross"` for other-video ones.
+        seed: sampling seed, used by `"cross"` only.
+
+    Returns:
+        One `(rows, oracle_row)` per question, aligned with `meta["qids"]`.
+    """
+    if pool_type not in POOL_TYPES:
+        raise ValueError(f"unknown pool_type {pool_type!r}")
+
+    rows = rows_by_video(meta["chunk_ids"])
+    rng = np.random.default_rng(seed)
+    every = np.arange(len(meta["chunk_ids"]))
+
+    pools = []
+    for vid in meta["query_vid"]:
+        own = rows[vid]
+        oracle = own[meta["oracle_idx"][vid]]
+        if pool_type == "within":
+            pools.append((own, oracle))
+        else:
+            # The whole video is excluded, not just the oracle: leaving its other minutes
+            # in would make a mixed pool and blunt the contrast.
+            picks = rng.choice(np.setdiff1d(every, own), size=len(own) - 1, replace=False)
+            pools.append(([oracle, *picks.tolist()], oracle))
+    return pools
+
+
+def rank_of(scores, oracle_score) -> int:
+    """
+    Pessimistic 0-based rank of `oracle_score` among `scores`; 0 is a top-1 hit.
+
+    Everything scoring at least as high counts as ahead, because a tie is not a hit and
+    `argmax` would quietly award it one.
+    """
+    return int((scores > oracle_score).sum() + (scores == oracle_score).sum() - 1)
+
 
 def select_chunk_embeddings(
     tensors: dict[str, torch.Tensor], representation: Literal[*REPRESENTATIONS]
@@ -70,28 +126,26 @@ def rows_by_video(chunk_ids: list[tuple[str, int]]) -> dict[str, list[int]]:
 def oracle_ranks(
     enc_artifact: DualEncoderArtifact,
     representation: Literal[*REPRESENTATIONS],
-    query: str
+    query: str,
+    pool_type: Literal[*POOL_TYPES] = "within",
+    seed: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Where the oracle lands for each question, and how many chunks it competed against.
 
-    Returns `(rank, pool)` per question; rank is 0-based, so 0 is a top-1 hit. Ties are
-    resolved pessimistically -- the oracle is credited only with the rank it would get if
-    every chunk scoring at least as high came first -- because a tie is not a hit and
-    `argmax` would quietly award it one.
+    Returns `(rank, pool_size)` per question; rank is 0-based, so 0 is a top-1 hit. Pass
+    `pool_type="cross"` to rank against a same-sized pool drawn from other videos instead
+    of the video's own chunks -- see `question_pools`.
     """
     tensors, meta = enc_artifact["tensors"], enc_artifact["meta"]
     chunks = select_chunk_embeddings(tensors, representation)
     queries = tensors[QUERIES[query]]
-    rows = rows_by_video(meta["chunk_ids"])
 
     ranks, pools = [], []
-    for qi, vid in enumerate(meta["query_vid"]):
-        idx = rows[vid]
-        scores = queries[qi] @ chunks[idx].T
-        oracle = scores[meta["oracle_idx"][vid]]
-        ranks.append(int((scores > oracle).sum() + (scores == oracle).sum() - 1))
-        pools.append(len(idx))
+    for qi, (rows, oracle) in enumerate(question_pools(meta, pool_type, seed)):
+        scores = queries[qi] @ chunks[rows].T
+        ranks.append(rank_of(scores, scores[rows.index(oracle)]))
+        pools.append(len(rows))
     return np.array(ranks), np.array(pools)
 
 

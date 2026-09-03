@@ -24,7 +24,14 @@ if str(_SRC) not in sys.path:
 from encoders.base import DualEncoder  # noqa: E402
 from logs import banner, setup_logging  # noqa: E402
 from plots import plot_top1_by_pool_size  # noqa: E402
-from scoring import QUERIES, REPRESENTATIONS, by_pool_size, metrics, oracle_ranks  # noqa: E402
+from scoring import (  # noqa: E402
+    POOL_TYPES,
+    QUERIES,
+    REPRESENTATIONS,
+    by_pool_size,
+    metrics,
+    oracle_ranks,
+)
 
 #: Chunk-count bands. Chosen for support on val (255/125/132/155/111 questions), not for
 #: round numbers -- a band with twenty questions in it says nothing.
@@ -38,6 +45,10 @@ def parse_args(argv=None):
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     p.add_argument("--cache", type=Path, required=True, help="a .pt written by encode_chunks")
+    p.add_argument("--pool-type", default="within", choices=[*POOL_TYPES, "both"],
+                   help="distractors from the same video (within), from other videos "
+                        "(cross, the control), or both")
+    p.add_argument("--seed", type=int, default=0, help="cross-video sampling seed")
     p.add_argument("--out-dir", type=Path, default=Path("outputs"))
     p.add_argument("--no-plot", action="store_true")
     p.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
@@ -59,33 +70,37 @@ def main(argv=None) -> int:
             "split": meta.get("split", "?"),
             "questions": len(meta["qids"]),
             "videos scored": len(set(meta["query_vid"])),
+            "pool": args.pool_type,
         },
     )
 
-    results = {}
-    log.info("%-12s %-16s %7s %7s %7s %8s", "chunks", "query", "top1", "top3", "mrr", "random")
-    for rep in REPRESENTATIONS:
-        for query in QUERIES:
-            ranks, pools = oracle_ranks(bundle, rep, query)
-            m = metrics(ranks, pools)
-            results[(rep, query)] = (ranks, pools)
-            log.info(
-                "%-12s %-16s %6.1f%% %6.1f%% %7.3f %7.1f%%",
-                rep,
-                query,
-                100 * m["top1"],
-                100 * m["top3"],
-                m["mrr"],
-                100 * m["random"],
-            )
+    pool_types = POOL_TYPES if args.pool_type == "both" else (args.pool_type,)
+    for pool_type in pool_types:
+        results = {}
+        log.info("--- %s-video pool ---", pool_type)
+        log.info("%-12s %-16s %7s %7s %7s %8s", "chunks", "query", "top1", "top3", "mrr", "random")
+        for rep in REPRESENTATIONS:
+            for query in QUERIES:
+                ranks, pools = oracle_ranks(bundle, rep, query, pool_type, args.seed)
+                m = metrics(ranks, pools)
+                results[(rep, query)] = (ranks, pools)
+                log.info(
+                    "%-12s %-16s %6.1f%% %6.1f%% %7.3f %7.1f%%",
+                    rep,
+                    query,
+                    100 * m["top1"],
+                    100 * m["top3"],
+                    m["mrr"],
+                    100 * m["random"],
+                )
 
-    if args.no_plot:
-        return 0
+        if args.no_plot:
+            continue
 
-    strata = {k: by_pool_size(r, p, BANDS) for k, (r, p) in results.items()}
-    name = args.cache.stem
-    path = plot_top1_by_pool_size(strata, args.out_dir / f"{name}_top1_by_pool.png", title=name)
-    log.info("wrote %s", path)
+        strata = {k: by_pool_size(r, p, BANDS) for k, (r, p) in results.items()}
+        name = f"{args.cache.stem}_{pool_type}"
+        path = plot_top1_by_pool_size(strata, args.out_dir / f"{name}_top1_by_pool.png", title=name)
+        log.info("wrote %s", path)
     return 0
 
 
