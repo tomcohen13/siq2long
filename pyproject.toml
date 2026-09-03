@@ -4,17 +4,19 @@ version = "0.1.0"
 description = "Retrieval-first video QA on Social-IQ 2.0: oracle-clip finding and long-video evaluation"
 requires-python = ">=3.12"
 dependencies = [
-    "accelerate",     # device_map="auto"
-    "av",             # load_video's default backend, used by data.videos.sample_frames
-    "matplotlib",     # plots
-    "numpy",          # imported directly by data.videos, not just via torch/pandas
+    "accelerate", # device_map="auto"
+    "av", # load_video's default backend, used by data.videos.sample_frames
+    "google-genai>=2.22.0",
+    "matplotlib", # plots
+    "numpy", # imported directly by data.videos, not just via torch/pandas
     "pandas",
     "python-dotenv",
     "qwen-vl-utils",
-    "statsmodels",    # proportion_confint, for the Wilson intervals on every accuracy
-    "timm",           # PeVideoModel's vision tower loads through TimmWrapperConfig
+    "rank-bm25", # lexical retrieval baseline over chunk transcripts (baselines.bm25_ranks)
+    "statsmodels", # proportion_confint, for the Wilson intervals on every accuracy
+    "timm", # PeVideoModel's vision tower loads through TimmWrapperConfig
     "torch",
-    "torchcodec",     # FORCE_QWENVL_VIDEO_READER
+    "torchcodec", # FORCE_QWENVL_VIDEO_READER
     "tqdm",
     "transformers",
     "webvtt-py",

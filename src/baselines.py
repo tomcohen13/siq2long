@@ -1,0 +1,169 @@
+"""
+Text-only retrieval baselines over chunk transcripts: BM25 and BGE.
+
+Rungs 3 and 4 of the ladder in FINDINGS §4, and the answer to *"you only tried
+CLIP-family encoders."* Both read the chunk transcripts that `retrieval.encode` persisted
+in the cache, so neither decodes a video and neither needs the encoder that wrote it --
+only `meta["chunk_texts"]`, `meta["chunk_ids"]` and `meta["oracle_idx"]`.
+
+Pooling and rank arithmetic come from `scoring`, so a baseline is scored exactly the way
+the encoders are: same distractors, same pessimistic tie-breaking, same random floor.
+That is the whole point of a baseline, and it is why neither function reimplements either.
+
+Queries are not in the cache -- only their embeddings are -- so `render_queries` rebuilds
+the strings from the QA rows.
+"""
+
+import logging
+import re
+
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn.functional as F
+from rank_bm25 import BM25Okapi
+from transformers import AutoModel, AutoTokenizer
+
+from config import Columns
+from encoders.base import DualEncoderArtifact, best_device
+from retrieval import render_query
+from scoring import POOL_TYPES, question_pools, rank_of
+
+logger = logging.getLogger(__name__)
+
+#: BGE v1.5 asks for an instruction on the query side only; passages are embedded bare.
+BGE_CHECKPOINT = "BAAI/bge-base-en-v1.5"
+BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
+_WORD = re.compile(r"[a-z0-9']+")
+
+
+def tokenize(text: str) -> list[str]:
+    """Lowercase word tokens. Deliberately plain -- BM25 is the floor, not a tuned system."""
+    return _WORD.findall(text.lower())
+
+
+def render_queries(
+    enc_artifact: DualEncoderArtifact, qa: pd.DataFrame, with_options: bool = True
+) -> list[str]:
+    """
+    The query strings behind the cache's query embeddings, in `meta["qids"]` order.
+
+    The cache stores encoded queries, not the text they came from, so a lexical baseline
+    has to rebuild them. Rendering goes through `retrieval.render_query`, the same function
+    the encoders used, so BM25 and BGE score the identical string X-CLIP saw.
+
+    Args:
+        enc_artifact: an artifact from `retrieval.encode`.
+        qa: QA rows covering every qid in the cache; deduplicated here.
+        with_options: append the four answer options, matching `query_qa`.
+
+    Raises:
+        KeyError: if any cached qid is absent from `qa` -- a silent reindex here would
+            score the wrong questions against the right chunks.
+    """
+    rows = qa.drop_duplicates(Columns.QID).set_index(Columns.QID)
+    qids = enc_artifact["meta"]["qids"]
+    missing = [q for q in qids if q not in rows.index]
+    if missing:
+        raise KeyError(f"{len(missing)} cached qids are not in qa, e.g. {missing[:5]}")
+    return [render_query(rows.loc[qid].to_dict(), with_options) for qid in qids]
+
+
+def bm25_ranks(
+    enc_artifact: DualEncoderArtifact,
+    queries: list[str],
+    pool_type: str = "within",
+    seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Where the oracle lands under BM25 over chunk transcripts.
+
+    IDF is fitted on **every** chunk in the cache, not per video: term statistics over the
+    six documents of one video are meaningless, and a corpus-level fit is what BM25
+    normally gets. Only the pool's chunks are then ranked.
+
+    A chunk whose transcript is empty scores 0. When every chunk in a pool scores 0 the
+    pessimistic tie-break puts the oracle last, which is the honest reading -- BM25 made
+    no choice there.
+
+    Returns:
+        `(ranks, pool_sizes)`, same shape and meaning as `scoring.oracle_ranks`.
+    """
+    meta = enc_artifact["meta"]
+    bm25 = BM25Okapi([tokenize(t) for t in meta["chunk_texts"]])
+    logger.info("BM25 over %d chunk transcripts", len(meta["chunk_texts"]))
+
+    ranks, pool_sizes = [], []
+    for qi, (rows, oracle) in enumerate(question_pools(meta, pool_type, seed)):
+        scores = bm25.get_scores(tokenize(queries[qi]))[rows]
+        ranks.append(rank_of(scores, scores[rows.index(oracle)]))
+        pool_sizes.append(len(rows))
+    return np.array(ranks), np.array(pool_sizes)
+
+
+@torch.inference_mode()
+def bge_embed(texts: list[str], tokenizer, model, batch_size: int = 64) -> torch.Tensor:
+    """CLS-pooled, L2-normalized BGE embeddings -- the pooling its checkpoint was trained for."""
+    out = []
+    for i in range(0, len(texts), batch_size):
+        batch = tokenizer(
+            texts[i : i + batch_size],
+            padding=True,
+            truncation=True,
+            max_length=512,
+            return_tensors="pt",
+        ).to(model.device)
+        cls = model(**batch).last_hidden_state[:, 0]
+        out.append(F.normalize(cls, dim=-1).cpu())
+    return torch.cat(out)
+
+
+def bge_ranks(
+    enc_artifact: DualEncoderArtifact,
+    queries: list[str],
+    pool_type: str = "within",
+    seed: int = 0,
+    checkpoint: str = BGE_CHECKPOINT,
+    device: str | None = None,
+    batch_size: int = 64,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Where the oracle lands under BGE dense-text retrieval over chunk transcripts.
+
+    The rung above BM25: a text retriever that is actually good at retrieval, given the
+    same transcripts. It reads 512 tokens against X-CLIP's 77, so if the transcript tower
+    were context-limited this is where that would show -- §1b already argues it is not.
+
+    Returns:
+        `(ranks, pool_sizes)`, same shape and meaning as `scoring.oracle_ranks`.
+    """
+    meta = enc_artifact["meta"]
+    device = device or best_device()
+    tokenizer = AutoTokenizer.from_pretrained(checkpoint)
+    model = AutoModel.from_pretrained(checkpoint).to(device).eval()
+    logger.info("BGE %s on %s over %d chunks", checkpoint, device, len(meta["chunk_texts"]))
+
+    chunk_vecs = bge_embed(meta["chunk_texts"], tokenizer, model, batch_size)
+    query_vecs = bge_embed([BGE_QUERY_PREFIX + q for q in queries], tokenizer, model, batch_size)
+
+    ranks, pool_sizes = [], []
+    for qi, (rows, oracle) in enumerate(question_pools(meta, pool_type, seed)):
+        scores = query_vecs[qi] @ chunk_vecs[rows].T
+        ranks.append(rank_of(scores, scores[rows.index(oracle)]))
+        pool_sizes.append(len(rows))
+    return np.array(ranks), np.array(pool_sizes)
+
+
+#: Name -> ranking function, for scripts that sweep the text baselines.
+TEXT_BASELINES = {"bm25": bm25_ranks, "bge": bge_ranks}
+
+__all__ = [
+    "BGE_CHECKPOINT",
+    "POOL_TYPES",
+    "TEXT_BASELINES",
+    "bge_ranks",
+    "bm25_ranks",
+    "render_queries",
+    "tokenize",
+]
