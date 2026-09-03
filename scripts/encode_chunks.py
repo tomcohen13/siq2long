@@ -18,8 +18,6 @@ import logging
 import sys
 from pathlib import Path
 
-import torch
-
 # Locate src/ relative to this file, so `python scripts/encode_chunks.py` works from any
 # cwd with no editable install and no PYTHONPATH.
 _SRC = Path(__file__).resolve().parents[1] / "src"
@@ -30,21 +28,13 @@ from config import DATASET_TO_DIR, Columns, Datasets  # noqa: E402
 from data.load import find_downloaded_files, load_qa  # noqa: E402
 from data.manifest import load_manifest  # noqa: E402
 from encoders import PEVideoEncoder, XCLIPEncoder  # noqa: E402
+from encoders.base import best_device  # noqa: E402
 from logs import banner, setup_logging  # noqa: E402
 from retrieval import encode  # noqa: E402
 
 ENCODERS = {"xclip": XCLIPEncoder, "pe-video": PEVideoEncoder}
 
 log = logging.getLogger("encode_chunks")
-
-
-def best_device() -> str:
-    """CUDA, else Apple's MPS, else CPU. MPS matches CPU to 1e-6 here and runs ~2x faster."""
-    if torch.cuda.is_available():
-        return "cuda"
-    if torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
 
 
 def parse_args(argv=None):
