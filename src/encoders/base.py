@@ -12,6 +12,19 @@ class DualEncoderOutput(TypedDict):
     text_embeddings: torch.Tensor
     video_embeddings: torch.Tensor
 
+class DualEncoderArtifact(TypedDict):
+    """
+    What `DualEncoder.save` writes / `retrieval.encode` returns.
+
+    The tensors are the embeddings, and the meta is the non-tensor payload that makes
+    them addressable: which (video, chunk) each row is, and the chunk transcripts BM25
+    needs.
+    """
+    checkpoint: str
+    num_frames: int
+    meta: dict[str, Any]
+    tensors: dict[str, torch.Tensor]
+
 
 class DualEncoder(torch.nn.Module, ABC):
     """
@@ -84,22 +97,23 @@ class DualEncoder(torch.nn.Module, ABC):
         """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(
-            {
-                "checkpoint": self.checkpoint,
-                "num_frames": self.num_frames,
-                "meta": meta or {},
-                "tensors": {name: t.detach().cpu() for name, t in tensors.items()},
-            },
-            path,
-        )
+        artifact: DualEncoderArtifact = {
+            "checkpoint": self.checkpoint,
+            "num_frames": self.num_frames,
+            "meta": meta or {},
+            "tensors": {name: t.detach().cpu() for name, t in tensors.items()},
+        }
+        torch.save(artifact, path)
 
     @staticmethod
-    def load(path: str | Path) -> dict[str, Any]:
+    def load(path: str | Path) -> DualEncoderArtifact:
         """
         Read back a `save` bundle: {"checkpoint", "num_frames", "meta", "tensors"}.
 
         `weights_only=False` because `meta` holds plain Python -- ids and transcripts --
         not just tensors. Only ever point this at a cache this repo wrote.
         """
-        return torch.load(Path(path), map_location="cpu", weights_only=False)
+        artifact: DualEncoderArtifact = torch.load(
+            Path(path), map_location="cpu", weights_only=False
+        )
+        return artifact

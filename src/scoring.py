@@ -7,12 +7,14 @@ own video, which is the task: find the oracle inside one long video, not across 
 """
 
 import logging
-from collections import Counter, defaultdict
+from collections import defaultdict
+from typing import Literal
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 
+from encoders.base import DualEncoderArtifact
 from stats import wilson_interval
 
 logger = logging.getLogger(__name__)
@@ -26,17 +28,38 @@ REPRESENTATIONS = ("video", "transcript", "fused")
 QUERIES = {"question": "query_q", "question+options": "query_qa"}
 
 
-def chunk_matrix(tensors: dict[str, torch.Tensor], representation: str) -> torch.Tensor:
+def select_chunk_embeddings(
+    tensors: dict[str, torch.Tensor], representation: Literal[*REPRESENTATIONS]
+) -> torch.Tensor:
+    """Pick the per-chunk embedding matrix for a given representation.
+
+    Args:
+        tensors: A `DualEncoderArtifact`'s tensors, holding ``video_embeddings`` and
+            ``text_embeddings``, each shaped ``(num_chunks, dim)``.
+        representation: Which embedding to return:
+            - ``"video"``: the video-encoder embeddings, unchanged.
+            - ``"transcript"``: the text-encoder embeddings, unchanged.
+            - ``"fused"``: the elementwise sum of the two, L2-normalized
+              along the last dimension. Note that ``"video"`` and
+              ``"transcript"`` are returned as-is, so only ``"fused"`` is
+              guaranteed to be unit-norm.
+
+    Returns:
+        A ``(num_chunks, dim)`` tensor of chunk embeddings.
+
+    Raises:
+        ValueError: If ``representation`` is not one of the three options.
+    """
     if representation == "video":
-        return tensors["chunk_video"]
+        return tensors["video_embeddings"]
     if representation == "transcript":
-        return tensors["chunk_text"]
+        return tensors["text_embeddings"]
     if representation == "fused":
-        return F.normalize(tensors["chunk_video"] + tensors["chunk_text"], dim=-1)
+        return F.normalize(tensors["video_embeddings"] + tensors["text_embeddings"], dim=-1)
     raise ValueError(f"unknown representation {representation!r}")
 
 
-def rows_by_video(chunk_ids: list) -> dict[str, list[int]]:
+def rows_by_video(chunk_ids: list[tuple[str, int]]) -> dict[str, list[int]]:
     """Row indices into the chunk tensors, per video, in chunk order."""
     rows = defaultdict(list)
     for row, (vid, _) in enumerate(chunk_ids):
@@ -44,7 +67,11 @@ def rows_by_video(chunk_ids: list) -> dict[str, list[int]]:
     return rows
 
 
-def oracle_ranks(bundle: dict, representation: str, query: str) -> tuple[np.ndarray, np.ndarray]:
+def oracle_ranks(
+    enc_artifact: DualEncoderArtifact,
+    representation: Literal[*REPRESENTATIONS],
+    query: str
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Where the oracle lands for each question, and how many chunks it competed against.
 
@@ -53,8 +80,8 @@ def oracle_ranks(bundle: dict, representation: str, query: str) -> tuple[np.ndar
     every chunk scoring at least as high came first -- because a tie is not a hit and
     `argmax` would quietly award it one.
     """
-    tensors, meta = bundle["tensors"], bundle["meta"]
-    chunks = chunk_matrix(tensors, representation)
+    tensors, meta = enc_artifact["tensors"], enc_artifact["meta"]
+    chunks = select_chunk_embeddings(tensors, representation)
     queries = tensors[QUERIES[query]]
     rows = rows_by_video(meta["chunk_ids"])
 
@@ -68,53 +95,68 @@ def oracle_ranks(bundle: dict, representation: str, query: str) -> tuple[np.ndar
     return np.array(ranks), np.array(pools)
 
 
-def select_chunks(
-    bundle: dict,
-    condition: str,
-    representation: str = "fused",
+def select_chunks_for_questions(
+    enc_artifact: DualEncoderArtifact,
+    selection_type: Literal["oracle", "top1", "random"],
+    representation: Literal[*REPRESENTATIONS] = "fused",
     query: str = "question+options",
     seed: int = 0,
 ) -> list[tuple[str, str, int]]:
     """
-    Which chunk each question should be answered from, as `(qid, vid, chunk_idx)`.
+    Select which video chunk each question in the dataset should be answered from.
 
-    The qid rides along rather than leaving the caller to zip against `meta["qids"]`:
-    downstream this becomes one QA row per entry, and a silent off-by-one there would
-    answer every question from someone else's video without anything looking wrong.
+    In the SIQ2Long pipeline, full videos are ingested and split into 1-minute chunks.
+    Then, for each question, one chunk is selected from its corresponding video,
+    and that chunk is passed to the VLM for answering. 
+    
+    A few selection options:
+    1. "oracle": always choose the original SIQ2.0 video trim.
+    2. "top1": choose the chunk whose embeddings are most similar to the question's,
+                given a specified representation (video, transcript, or fused).
+    3. "random": choose a chunk at random from the video. 
+                This serves as a baseline to compare against the other selection methods.
 
-    The conditions are the rows of the end-to-end table. `gold` is the upper bound a
-    perfect retriever would reach; `top1` is what the retriever actually returns; `random`
-    and `prior` are the floors the retrieval numbers are measured against, carried through
-    to QA so the same reference frame holds on both halves of the paper.
+    A positional prior is deliberately absent. The obvious form -- predict the modal
+    oracle index, clamped to videos with fewer chunks -- degenerates into "the last
+    chunk" exactly on the short videos where guessing is easiest, so it flatters itself.
+    A principled version would fall back down the empirical distribution (mode, then
+    next most common that exists) rather than clamping; until then the positional
+    baseline stays in the retrieval table, where it is computed honestly.
 
-    `prior` predicts the modal oracle position, clamped to each video's own chunk count --
-    the trivial heuristic that beats every encoder configuration on retrieval.
+    Args:
+        enc_artifact: The artifact returned by `retrieval.encode`, containing the
+            embeddings and metadata for all videos and questions.
+        selection_type: One of "oracle", "top1", or "random", determining how to select
+            the chunk for each question.
+        representation: Which chunk representation to use when selecting the top1 chunk.
+            Must be one of "video", "transcript", or "fused".
+        query: Which query representation to use when selecting the top1 chunk. Must be
+            one of "question" or "question+options".
+        seed: Random seed for reproducibility when using random selection.
     """
-    meta, tensors = bundle["meta"], bundle["tensors"]
-    rows = rows_by_video(meta["chunk_ids"])
-    rng = np.random.default_rng(seed)
+    meta, tensors = enc_artifact["meta"], enc_artifact["tensors"]
+    questions = list(zip(meta["qids"], meta["query_vid"], strict=True))
 
-    if condition == "top1":
-        chunks = chunk_matrix(tensors, representation)
+    if selection_type == "oracle":
+        return [(qid, vid, meta["oracle_idx"][vid]) for qid, vid in questions]
+
+    rows_per_video = rows_by_video(meta["chunk_ids"])
+
+    if selection_type == "top1":
+        chunks = select_chunk_embeddings(tensors, representation)
         queries = tensors[QUERIES[query]]
+        return [
+            (qid, vid, int((queries[qi] @ chunks[rows_per_video[vid]].T).argmax()))
+            for qi, (qid, vid) in enumerate(questions)
+        ]
 
-    modal = Counter(meta["oracle_idx"][v] for v in meta["query_vid"]).most_common(1)[0][0]
+    if selection_type == "random":
+        rng = np.random.default_rng(seed)
+        return [
+            (qid, vid, int(rng.integers(len(rows_per_video[vid])))) for qid, vid in questions
+        ]
 
-    out = []
-    for qi, (qid, vid) in enumerate(zip(meta["qids"], meta["query_vid"], strict=True)):
-        idx = rows[vid]
-        if condition == "gold":
-            pick = meta["oracle_idx"][vid]
-        elif condition == "top1":
-            pick = int((queries[qi] @ chunks[idx].T).argmax())
-        elif condition == "random":
-            pick = int(rng.integers(len(idx)))
-        elif condition == "prior":
-            pick = min(modal, len(idx) - 1)
-        else:
-            raise ValueError(f"unknown condition {condition!r}")
-        out.append((qid, vid, pick))
-    return out
+    raise ValueError(f"unknown selection_type {selection_type!r}")
 
 
 def metrics(ranks: np.ndarray, pools: np.ndarray) -> dict[str, float]:

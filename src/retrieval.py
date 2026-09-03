@@ -13,16 +13,16 @@ baselines run off the cache too, with no second pass over the VTTs.
 """
 
 import logging
-from pathlib import Path
-
 import pandas as pd
 import torch
+
+from pathlib import Path
 from tqdm import tqdm
 
 from config import ANSWER_KEYS, Columns
 from data.transcripts import split_transcript_by_ranges
 from data.videos import sample_windows
-from encoders.base import DualEncoder
+from encoders.base import DualEncoder, DualEncoderOutput
 
 logger = logging.getLogger(__name__)
 
@@ -78,16 +78,18 @@ def encode_chunks(
         video_embeds.append(encoder.encode_videos(batch_frames).cpu())
         text_embeds.append(encoder.encode_texts(batch_texts).cpu())
 
-    video_embeds, text_embeds = torch.cat(video_embeds), torch.cat(text_embeds)
-    # A row per chunk in both modalities, or every downstream lookup by chunk index is
-    # silently off. `encode_texts` accepts a bare string and returns one row for it, so
-    # this misalignment is the kind that reaches scoring rather than raising here.
+    # Should be one row per chunk in both modalities, complain otherwise.
     if not len(video_embeds) == len(text_embeds) == len(chunks):
         raise RuntimeError(
             f"encoded {len(video_embeds)} video and {len(text_embeds)} text rows "
             f"for {len(chunks)} chunks of {video_path}"
         )
-    return video_embeds, text_embeds, texts
+    out: DualEncoderOutput = {
+        "video_embeddings": torch.cat(video_embeds),
+        "text_embeddings": torch.cat(text_embeds),
+        "texts": texts,
+    }
+    return out
 
 
 def encode(
@@ -96,7 +98,7 @@ def encode(
     qa: pd.DataFrame,
     files: pd.DataFrame,
     limit: int | None = None,
-) -> tuple[dict[str, torch.Tensor], dict]:
+) -> tuple[DualEncoderOutput, dict]:
     """
     Encode the chunks of every manifest video, and every question asked about them.
 
@@ -126,7 +128,7 @@ def encode(
     for vid in tqdm(vids, desc="chunks", unit="video"):
         chunks = manifest[vid]["chunks"]
         try:
-            v_emb, t_emb, texts = encode_chunks(
+            chunk_embeds = encode_chunks(
                 encoder,
                 video_path=paths.loc[vid, Columns.VIDEO_PATH],
                 transcript_path=paths.loc[vid, Columns.TRANSCRIPT_PATH],
@@ -136,10 +138,10 @@ def encode(
             logger.exception("could not encode %s; skipping", vid)
             failed.append(vid)
             continue
-        video_embs.append(v_emb)
-        text_embs.append(t_emb)
+        video_embs.append(chunk_embeds["video_embeddings"])
+        text_embs.append(chunk_embeds["text_embeddings"])
         chunk_ids.extend((vid, i) for i in range(len(chunks)))
-        chunk_texts.extend(texts)
+        chunk_texts.extend(chunk_embeds["texts"])
 
     if not video_embs:
         raise RuntimeError("no video encoded successfully")
@@ -155,9 +157,9 @@ def encode(
             [encoder.encode_texts(b).cpu() for b in _batches(texts, encoder.batch_size)]
         )
 
-    tensors = {
-        "chunk_video": torch.cat(video_embs),
-        "chunk_text": torch.cat(text_embs),
+    tensors: DualEncoderOutput = {
+        "video_embeddings": torch.cat(video_embs),
+        "text_embeddings": torch.cat(text_embs),
         **queries,
     }
     meta = {

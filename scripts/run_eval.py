@@ -11,7 +11,7 @@ batch in flight.
     python scripts/run_eval.py --model internvl3 --dataset siq2 --split val --no-transcript
 
 Pass --embeddings to answer each question from one retrieved chunk instead of the whole
-video. --condition gold is the ceiling a perfect retriever reaches, top1 is what the
+video. --condition oracle is the ceiling a perfect retriever reaches, top1 is what the
 retriever returns, and the gap between them is what retrieval failure costs:
 
     python scripts/run_eval.py --model qwen3-vl --dataset siq2long --split val \
@@ -44,7 +44,7 @@ from data.videos import slice_video
 from encoders.base import DualEncoder
 from inference import run
 from logs import banner, setup_logging
-from scoring import select_chunks
+from scoring import select_chunks_for_questions
 from vlm import InternVL3_8B, LlavaNextVideo, Qwen2_5VL, Qwen3VL, VideoLlama3
 
 MODELS = {
@@ -68,7 +68,7 @@ def parse_args(argv=None):
 
     # Chunk mode: answer each question from one retrieved chunk instead of the whole video.
     p.add_argument("--embeddings", type=Path, help="embedding cache from encode_chunks.py")
-    p.add_argument("--condition", default="gold", choices=["gold", "top1", "random", "prior"],
+    p.add_argument("--condition", default="oracle", choices=["oracle", "top1", "random"],
                    help="which chunk answers each question (with --embeddings)")
     p.add_argument("--chunks-dir", type=Path, default=Path("outputs/chunks"),
                    help="where cut video chunks are cached")
@@ -131,7 +131,7 @@ def environment() -> str:
 def run_name(args) -> str:
     condition = "notx" if args.no_transcript else "tx"
     order = "_qfirst" if args.question_first else ""
-    # The retrieval condition is part of the identity: gold and top1 runs differ only in
+    # The retrieval condition is part of the identity: oracle and top1 runs differ only in
     # which chunk answered, and sharing an output file would silently resume across them.
     chunks = f"_{args.condition}" if args.embeddings else ""
     stem = f"{args.model}_{args.dataset}_{args.split}_{condition}{order}{chunks}"
@@ -143,7 +143,7 @@ def load_chunk_rows(args):
     QA rows answered from a single chunk each, with that chunk cut to its own file.
 
     The end-to-end half of the paper: instead of handing a model the whole video, hand it
-    one 60s window and see what the answer costs. `--condition gold` is the ceiling a
+    one 60s window and see what the answer costs. `--condition oracle` is the ceiling a
     perfect retriever reaches, `top1` is what the retriever actually returns, and the gap
     between them is the price of retrieval failure.
 
@@ -155,9 +155,14 @@ def load_chunk_rows(args):
     Chunks have to exist on disk because the VLM backends take a path and decode it whole,
     unlike the encoders, which read frame indices straight out of the source.
     """
-    bundle = DualEncoder.load(args.embeddings)
-    meta = bundle["meta"]
-    picks = select_chunks(bundle, args.condition)
+    artifact = DualEncoder.load(args.embeddings)
+    meta = artifact["meta"]
+    picks = select_chunks_for_questions(
+        artifact,
+        selection_type=args.condition,
+        representation="fused",
+        query="question+options",
+    )
     if args.limit:
         picks = picks[: args.limit]
 
@@ -168,7 +173,7 @@ def load_chunk_rows(args):
 
     log.info(
         "%s: %d questions over %d distinct chunks (cache: %s)",
-        args.condition, len(picks), len({(v, i) for _, v, i in picks}), bundle["checkpoint"],
+        args.condition, len(picks), len({(v, i) for _, v, i in picks}), artifact["checkpoint"],
     )
 
     rows, transcripts = [], {}

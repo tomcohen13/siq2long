@@ -114,11 +114,11 @@ def sample_frames(
 def sample_windows(
     video_path: str,
     windows: list[list[float]],
-    num_frames: int,
+    frames_per_window: int,
     backend: str = "pyav",
 ) -> list[np.ndarray]:
     """
-    Decode `num_frames` from each `[start, end]` window, in one pass over the file.
+    Decode `frames_per_window` from each `[start, end]` window, in one pass over the file.
 
     PyAV reads forward from the start instead of seeking, so decoding windows one at a
     time re-reads the whole file each time -- about 4x slower here, for identical frames.
@@ -132,7 +132,10 @@ def sample_windows(
     sizes: list[int] = []
 
     def indices(metadata, **kwargs):
-        per_window = [window_frame_indices(metadata, num_frames, s, e) for s, e in windows]
+        per_window = [
+            window_frame_indices(metadata, frames_per_window, s, e)
+            for s, e in windows
+        ]
         sizes[:] = [len(i) for i in per_window]
         return np.concatenate(per_window)
 
