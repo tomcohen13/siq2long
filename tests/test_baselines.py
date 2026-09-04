@@ -1,19 +1,17 @@
 """
 Text-only retrieval baselines.
 
-BM25 is scored through the same `question_pools` / `rank_of` path as the encoders, so
-what is pinned here is the wiring: that pool rows index the corpus correctly, that the
-oracle is found within the pool rather than in the global table, and that query strings
-are rebuilt in cache order. BGE differs only in how scores are produced, so it is not
-exercised here -- that would download a checkpoint to test arithmetic already covered.
+BM25 is scored through the same `question_pools` / `rank_of` path as the encoders, so what
+is pinned here is the wiring: that pool rows index the corpus correctly, and that the
+oracle is found within the pool rather than in the global table. BGE differs only in how
+scores are produced, so it is not exercised here -- that would download a checkpoint to
+test arithmetic already covered. Query rendering lives in `test_retrieval_queries.py`.
 """
 
 import numpy as np
-import pandas as pd
 import pytest
 
-from baselines import bm25_ranks, render_queries, tokenize
-from config import ANSWER_KEYS, Columns
+from baselines import bm25_ranks, tokenize
 
 
 def make_artifact(chunk_texts: dict[str, list[str]], oracles: dict[str, int], query_vid: list[str]):
@@ -104,42 +102,3 @@ def test_bm25_returns_arrays(artifact):
     assert isinstance(ranks, np.ndarray) and isinstance(pools, np.ndarray)
 
 
-# --- render_queries ----------------------------------------------------------
-
-def qa_frame(qids):
-    return pd.DataFrame(
-        [
-            {
-                Columns.QID: qid,
-                Columns.QUESTION: f"question {i}",
-                **{k: f"opt{i}{j}" for j, k in enumerate(ANSWER_KEYS)},
-            }
-            for i, qid in enumerate(qids)
-        ]
-    )
-
-
-def test_render_queries_follows_cache_order(artifact):
-    """qa in any order; the output must line up with meta['qids'] or scores misalign."""
-    qa = qa_frame(list(reversed(artifact["meta"]["qids"])))
-    rendered = render_queries(artifact, qa, with_options=False)
-    assert rendered == ["question 1", "question 0"]
-
-
-def test_render_queries_appends_options(artifact):
-    qa = qa_frame(artifact["meta"]["qids"])
-    with_opts = render_queries(artifact, qa, with_options=True)
-    assert with_opts[0].startswith("question 0 ") and "opt00" in with_opts[0]
-
-
-def test_render_queries_tolerates_duplicate_qids(artifact):
-    """Duplicated qids made .loc return a DataFrame and broke a 500-question run once."""
-    qa = qa_frame(artifact["meta"]["qids"])
-    doubled = pd.concat([qa, qa], ignore_index=True)
-    assert render_queries(artifact, doubled) == render_queries(artifact, qa)
-
-
-def test_render_queries_rejects_a_missing_qid(artifact):
-    qa = qa_frame(artifact["meta"]["qids"][:1])
-    with pytest.raises(KeyError, match="not in qa"):
-        render_queries(artifact, qa)

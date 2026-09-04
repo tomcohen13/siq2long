@@ -22,7 +22,8 @@ from tqdm import tqdm
 from config import ANSWER_KEYS, Columns
 from data.transcripts import split_transcript_by_ranges
 from data.videos import sample_windows
-from encoders.base import DualEncoder, DualEncoderOutput
+from encoders.base import DualEncoder, DualEncoderArtifact, DualEncoderOutput
+from scoring import QUERY_TENSORS
 
 logger = logging.getLogger(__name__)
 
@@ -46,23 +47,101 @@ class ArtifactTensors(DualEncoderOutput):
     query_qa: torch.Tensor
 
 
-def render_query(row: dict, with_options: bool) -> str:
+def render_query(row: dict, form: str) -> str:
     """
-    The retrieval query for one question.
+    The retrieval query text for one question, in one of the forms in `scoring.QUERY_TENSORS`.
 
-    Both forms are encoded because which one is fair is itself in question: the options
-    are available at retrieval time in a multiple-choice setting, but they also carry
-    content the question alone does not.
+    Every form is encoded because which one is fair is itself in question, and because the
+    contrast between them is the diagnostic:
+
+    - `question` -- the bare question. What a real system would have.
+    - `question+options` -- also fair in a multiple-choice setting, but the options carry
+      content the question does not.
+    - `answer` -- the gold answer alone, a declarative statement about the clip and exactly
+      the caption shape these encoders were pretrained on. Uses the label, so it is a
+      **diagnostic only**; it isolates query form from query content (§3).
+
+    Raises:
+        ValueError: on an unknown form, or on `answer` for a row with no gold label (the
+            test split has none) -- silently returning the question there would make the
+            diagnostic compare a form against itself.
     """
     question = str(row[Columns.QUESTION])
-    if not with_options:
+    if form == "question":
         return question
-    return " ".join([question, *(str(row[k]) for k in ANSWER_KEYS)])
+    if form == "question+options":
+        return " ".join([question, *(str(row[k]) for k in ANSWER_KEYS)])
+    if form == "answer":
+        gold = row.get(Columns.ANSWER_TEXT)
+        if gold is None or pd.isna(gold):
+            raise ValueError(f"no gold answer for {row.get(Columns.QID)!r}")
+        return str(gold)
+    raise ValueError(f"unknown query form {form!r}")
+
+
+def render_queries_in_order(
+    artifact: DualEncoderArtifact, qa: pd.DataFrame, form: str = "question+options"
+) -> list[str]:
+    """
+    The query strings behind a cache's query embeddings, in its own qid order.
+
+    The cache stores encoded queries, not their text, so anything that needs the strings
+    back -- a lexical baseline, a query form added later -- rebuilds them through the same
+    `render_query` the encoders used.
+    """
+    return [render_query(row, form) for row in rows_in_query_order(artifact, qa)]
 
 
 def _batches(items: list, size: int):
     for i in range(0, len(items), size):
         yield items[i : i + size]
+
+
+def rows_in_query_order(artifact: DualEncoderArtifact, qa: pd.DataFrame) -> list[dict]:
+    """
+    QA rows ordered to match an artifact's query tensors, row for row.
+
+    The query tensors are positional: row `i` is `meta["qids"][i]`. Anything that rebuilds
+    query text later -- a lexical baseline, a query form added after the fact -- has to
+    reproduce that order exactly, or it scores the wrong question against the right chunks.
+
+    Raises:
+        KeyError: if a cached qid is missing from `qa`. Reindexing past it would silently
+            shift every row after it.
+    """
+    qa_by_qid = qa.drop_duplicates(Columns.QID).set_index(Columns.QID)
+    qids = artifact["meta"]["qids"]
+    absent = [qid for qid in qids if qid not in qa_by_qid.index]
+    if absent:
+        raise KeyError(f"{len(absent)} cached qids are not in qa, e.g. {absent[:5]}")
+    return [qa_by_qid.loc[qid].to_dict() | {Columns.QID: qid} for qid in qids]
+
+def encode_queries(
+    encoder: DualEncoder, rows: list[dict], forms: list[str] | None = None
+) -> dict[str, torch.Tensor]:
+    """
+    Encode each query form over the same rows, keyed by the tensor name it is stored under.
+
+    Args:
+        encoder: any `DualEncoder`; only its text tower is used.
+        rows: QA records, in the order the artifact's `qids` are in.
+        forms: which of `scoring.QUERY_TENSORS` to encode. Default is all of them, minus any that
+            these rows cannot express -- the test split has no gold answer, so `answer` is
+            dropped there rather than failing the run.
+    """
+    query_tensors = {}
+    for form in forms if forms is not None else QUERY_TENSORS:
+        try:
+            query_texts = [render_query(row, form) for row in rows]
+        except ValueError as reason:
+            logger.warning("skipping query form %r: %s", form, reason)
+            continue
+        query_tensors[QUERY_TENSORS[form]] = torch.cat(
+            [encoder.encode_texts(batch).cpu()
+             for batch in _batches(query_texts, encoder.batch_size)]
+        )
+        logger.info("encoded %d queries as %r", len(query_texts), form)
+    return query_tensors
 
 
 def encode_chunks(
@@ -170,12 +249,7 @@ def encode(
     rows = qa[qa[Columns.VIDEO_ID].isin(encoded)].to_dict("records")
     logger.info("encoding %d questions over %d videos", len(rows), len(encoded))
 
-    queries = {}
-    for name, with_options in (("query_q", False), ("query_qa", True)):
-        texts = [render_query(r, with_options) for r in rows]
-        queries[name] = torch.cat(
-            [encoder.encode_texts(b).cpu() for b in _batches(texts, encoder.batch_size)]
-        )
+    queries = encode_queries(encoder, rows)
 
     tensors: ArtifactTensors = {
         "video_embeddings": torch.cat(video_embs),

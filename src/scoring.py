@@ -23,9 +23,18 @@ logger = logging.getLogger(__name__)
 #: the untrained stand-in for the fusion adapters, not the adapters themselves.
 REPRESENTATIONS = ("video", "transcript", "fused")
 
-#: Query-side forms. The options are available at retrieval time in a multiple-choice
-#: setting, but they carry content the bare question does not, so both are reported.
-QUERIES = {"question": "query_q", "question+options": "query_qa"}
+#: Query-side forms, mapped to the tensor each is stored under.
+#:
+#: `question+options` is reported alongside `question` because the options are available at
+#: retrieval time in a multiple-choice setting, but they carry content the bare question
+#: does not.
+#:
+#: `answer` is the gold answer alone -- a declarative statement about the clip, which is
+#: exactly the caption shape these encoders were pretrained on. **It is a diagnostic, not a
+#: system**: it uses the label, so it can never be a reported retrieval result. It exists to
+#: separate query *form* from query *content* (§3). A cache written before this form was
+#: added will not have the tensor, so callers should score the forms a cache actually holds.
+QUERY_TENSORS = {"question": "query_q", "question+options": "query_qa", "answer": "query_a"}
 
 #: Where the distractors come from. `within` is the task; `cross` is the control.
 POOL_TYPES = ("within", "cross")
@@ -124,9 +133,9 @@ def rows_by_video(chunk_ids: list[tuple[str, int]]) -> dict[str, list[int]]:
 
 
 def oracle_ranks(
-    enc_artifact: DualEncoderArtifact,
+    artifact: DualEncoderArtifact,
     representation: Literal[*REPRESENTATIONS],
-    query: str,
+    query_form: str,
     pool_type: Literal[*POOL_TYPES] = "within",
     seed: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -137,9 +146,9 @@ def oracle_ranks(
     `pool_type="cross"` to rank against a same-sized pool drawn from other videos instead
     of the video's own chunks -- see `question_pools`.
     """
-    tensors, meta = enc_artifact["tensors"], enc_artifact["meta"]
+    tensors, meta = artifact["tensors"], artifact["meta"]
     chunks = select_chunk_embeddings(tensors, representation)
-    queries = tensors[QUERIES[query]]
+    queries = tensors[QUERY_TENSORS[query_form]]
 
     ranks, pools = [], []
     for qi, (rows, oracle) in enumerate(question_pools(meta, pool_type, seed)):
@@ -150,10 +159,10 @@ def oracle_ranks(
 
 
 def select_chunks_for_questions(
-    enc_artifact: DualEncoderArtifact,
+    artifact: DualEncoderArtifact,
     selection_type: Literal["oracle", "top1", "random"],
     representation: Literal[*REPRESENTATIONS] = "fused",
-    query: str = "question+options",
+    query_form: str = "question+options",
     seed: int = 0,
 ) -> list[tuple[str, str, int]]:
     """
@@ -178,7 +187,7 @@ def select_chunks_for_questions(
     baseline stays in the retrieval table, where it is computed honestly.
 
     Args:
-        enc_artifact: The artifact returned by `retrieval.encode`, containing the
+        artifact: The artifact returned by `retrieval.encode`, containing the
             embeddings and metadata for all videos and questions.
         selection_type: One of "oracle", "top1", or "random", determining how to select
             the chunk for each question.
@@ -188,7 +197,7 @@ def select_chunks_for_questions(
             one of "question" or "question+options".
         seed: Random seed for reproducibility when using random selection.
     """
-    meta, tensors = enc_artifact["meta"], enc_artifact["tensors"]
+    meta, tensors = artifact["meta"], artifact["tensors"]
     questions = list(zip(meta["qids"], meta["query_vid"], strict=True))
 
     if selection_type == "oracle":
@@ -198,7 +207,7 @@ def select_chunks_for_questions(
 
     if selection_type == "top1":
         chunks = select_chunk_embeddings(tensors, representation)
-        queries = tensors[QUERIES[query]]
+        queries = tensors[QUERY_TENSORS[query_form]]
         return [
             (qid, vid, int((queries[qi] @ chunks[rows_per_video[vid]].T).argmax()))
             for qi, (qid, vid) in enumerate(questions)

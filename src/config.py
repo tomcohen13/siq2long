@@ -25,6 +25,7 @@ class Columns(StrEnum):
     ANSWER_2 = "a2"
     ANSWER_3 = "a3"
     ANSWER_IDX = "answer_idx"  # absent in the test split
+    ANSWER_TEXT = "ans_corr"   # the correct answer's text; absent in the test split
 
     VIDEO_PATH = "path_to_video"
     TRANSCRIPT_PATH = "path_to_transcript"

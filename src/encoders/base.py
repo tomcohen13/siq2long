@@ -28,6 +28,9 @@ class DualEncoderArtifact(TypedDict):
     The tensors are the embeddings, and the meta is the non-tensor payload that makes
     them addressable: which (video, chunk) each row is, and the chunk transcripts BM25
     needs.
+
+    The scripts call this **the cache** and take it as `--cache`, because from their side
+    the point of it is not re-encoding. Same object.
     """
     checkpoint: str
     num_frames: int

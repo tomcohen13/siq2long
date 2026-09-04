@@ -26,12 +26,13 @@ _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from baselines import TEXT_BASELINES, render_queries  # noqa: E402
+from baselines import TEXT_BASELINES  # noqa: E402
 from config import Datasets  # noqa: E402
 from data.load import load_qa  # noqa: E402
-from encoders.base import DualEncoder  # noqa: E402
+from encoders.base import DualEncoder, DualEncoderArtifact  # noqa: E402
 from logs import banner, setup_logging  # noqa: E402
-from scoring import POOL_TYPES, QUERIES, metrics  # noqa: E402
+from retrieval import render_queries_in_order  # noqa: E402
+from scoring import POOL_TYPES, QUERY_TENSORS, metrics  # noqa: E402
 
 log = logging.getLogger("eval_baselines")
 
@@ -45,7 +46,7 @@ def parse_args(argv=None):
                    help="where to read the question text from")
     p.add_argument("--split", help="default: the split recorded in the cache")
     p.add_argument("--baseline", default="both", choices=[*TEXT_BASELINES, "both"])
-    p.add_argument("--query", default="both", choices=[*QUERIES, "both"])
+    p.add_argument("--query", default="both", choices=[*QUERY_TENSORS, "both"])
     p.add_argument("--pool-type", default="within", choices=[*POOL_TYPES, "both"])
     p.add_argument("--seed", type=int, default=0, help="cross-video sampling seed")
     p.add_argument("--device", help="BGE device; default is the best available")
@@ -57,8 +58,8 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     setup_logging(level=args.log_level)
 
-    bundle = DualEncoder.load(args.cache)
-    meta = bundle["meta"]
+    artifact: DualEncoderArtifact = DualEncoder.load(args.cache)
+    meta = artifact["meta"]
     split = args.split or meta.get("split")
     if not split:
         log.error("the cache records no split; pass --split")
@@ -75,17 +76,18 @@ def main(argv=None) -> int:
 
     qa = load_qa(split, args.dataset)
     names = TEXT_BASELINES if args.baseline == "both" else {args.baseline: TEXT_BASELINES[args.baseline]}
-    query_forms = QUERIES if args.query == "both" else {args.query: QUERIES[args.query]}
+    query_forms = (QUERY_TENSORS if args.query == "both"
+                   else {args.query: QUERY_TENSORS[args.query]})
     pool_types = POOL_TYPES if args.pool_type == "both" else (args.pool_type,)
 
     log.info("%-6s %-16s %-8s %7s %7s %7s %8s",
              "model", "query", "pool", "top1", "top3", "mrr", "random")
     for name, rank_fn in names.items():
         for query in query_forms:
-            queries = render_queries(bundle, qa, with_options=query == "question+options")
+            queries = render_queries_in_order(artifact, qa, form=query)
             for pool_type in pool_types:
                 kwargs = {"device": args.device} if name == "bge" else {}
-                ranks, pools = rank_fn(bundle, queries, pool_type, args.seed, **kwargs)
+                ranks, pools = rank_fn(artifact, queries, pool_type, args.seed, **kwargs)
                 m = metrics(ranks, pools)
                 log.info("%-6s %-16s %-8s %6.1f%% %6.1f%% %7.3f %7.1f%%",
                          name, query, pool_type,

@@ -10,23 +10,20 @@ Pooling and rank arithmetic come from `scoring`, so a baseline is scored exactly
 the encoders are: same distractors, same pessimistic tie-breaking, same random floor.
 That is the whole point of a baseline, and it is why neither function reimplements either.
 
-Queries are not in the cache -- only their embeddings are -- so `render_queries` rebuilds
-the strings from the QA rows.
+Queries are not in the cache -- only their embeddings are -- so callers rebuild the strings
+with `retrieval.render_queries_in_order`.
 """
 
 import logging
 import re
 
 import numpy as np
-import pandas as pd
 import torch
 import torch.nn.functional as F
 from rank_bm25 import BM25Okapi
 from transformers import AutoModel, AutoTokenizer
 
-from config import Columns
 from encoders.base import DualEncoderArtifact, best_device
-from retrieval import render_query
 from scoring import POOL_TYPES, question_pools, rank_of
 
 logger = logging.getLogger(__name__)
@@ -43,35 +40,8 @@ def tokenize(text: str) -> list[str]:
     return _WORD.findall(text.lower())
 
 
-def render_queries(
-    enc_artifact: DualEncoderArtifact, qa: pd.DataFrame, with_options: bool = True
-) -> list[str]:
-    """
-    The query strings behind the cache's query embeddings, in `meta["qids"]` order.
-
-    The cache stores encoded queries, not the text they came from, so a lexical baseline
-    has to rebuild them. Rendering goes through `retrieval.render_query`, the same function
-    the encoders used, so BM25 and BGE score the identical string X-CLIP saw.
-
-    Args:
-        enc_artifact: an artifact from `retrieval.encode`.
-        qa: QA rows covering every qid in the cache; deduplicated here.
-        with_options: append the four answer options, matching `query_qa`.
-
-    Raises:
-        KeyError: if any cached qid is absent from `qa` -- a silent reindex here would
-            score the wrong questions against the right chunks.
-    """
-    rows = qa.drop_duplicates(Columns.QID).set_index(Columns.QID)
-    qids = enc_artifact["meta"]["qids"]
-    missing = [q for q in qids if q not in rows.index]
-    if missing:
-        raise KeyError(f"{len(missing)} cached qids are not in qa, e.g. {missing[:5]}")
-    return [render_query(rows.loc[qid].to_dict(), with_options) for qid in qids]
-
-
 def bm25_ranks(
-    enc_artifact: DualEncoderArtifact,
+    artifact: DualEncoderArtifact,
     queries: list[str],
     pool_type: str = "within",
     seed: int = 0,
@@ -90,7 +60,7 @@ def bm25_ranks(
     Returns:
         `(ranks, pool_sizes)`, same shape and meaning as `scoring.oracle_ranks`.
     """
-    meta = enc_artifact["meta"]
+    meta = artifact["meta"]
     bm25 = BM25Okapi([tokenize(t) for t in meta["chunk_texts"]])
     logger.info("BM25 over %d chunk transcripts", len(meta["chunk_texts"]))
 
@@ -120,7 +90,7 @@ def bge_embed(texts: list[str], tokenizer, model, batch_size: int = 64) -> torch
 
 
 def bge_ranks(
-    enc_artifact: DualEncoderArtifact,
+    artifact: DualEncoderArtifact,
     queries: list[str],
     pool_type: str = "within",
     seed: int = 0,
@@ -138,7 +108,7 @@ def bge_ranks(
     Returns:
         `(ranks, pool_sizes)`, same shape and meaning as `scoring.oracle_ranks`.
     """
-    meta = enc_artifact["meta"]
+    meta = artifact["meta"]
     device = device or best_device()
     tokenizer = AutoTokenizer.from_pretrained(checkpoint)
     model = AutoModel.from_pretrained(checkpoint).to(device).eval()
@@ -164,6 +134,5 @@ __all__ = [
     "TEXT_BASELINES",
     "bge_ranks",
     "bm25_ranks",
-    "render_queries",
     "tokenize",
 ]
