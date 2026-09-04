@@ -7,7 +7,7 @@ import pytest
 matplotlib.use("Agg")  # no display in CI
 
 from plots import PAPER_RC, accuracy_table, plot_model_accuracy, save_figure
-from stats import wilson_interval
+from stats import mcnemar_test, wilson_interval
 
 
 # --- wilson_interval ---------------------------------------------------------
@@ -46,6 +46,65 @@ def test_qwen_and_internvl_intervals_overlap():
 def test_rejects_impossible_inputs(successes, n):
     with pytest.raises(ValueError):
         wilson_interval(successes, n)
+
+
+# --- mcnemar_test ------------------------------------------------------------
+
+def test_concordant_items_carry_no_information():
+    """Both right or both wrong says nothing about which condition is better."""
+    a = [True] * 50 + [False] * 50
+    assert mcnemar_test(a, a)["p"] == 1.0
+
+
+def test_discordant_counts_are_directional():
+    a = [True, True, False, False]
+    b = [False, False, False, True]
+    r = mcnemar_test(a, b)
+    assert (r["n10"], r["n01"]) == (2, 1)
+
+
+def test_delta_is_a_minus_b():
+    a = [True] * 6 + [False] * 4
+    b = [True] * 3 + [False] * 7
+    assert mcnemar_test(a, b)["delta"] == pytest.approx(0.3)
+
+
+def test_swapping_arguments_flips_the_sign_but_not_the_p():
+    a = [True] * 30 + [False] * 70
+    b = [True] * 12 + [False] * 88
+    forward, back = mcnemar_test(a, b), mcnemar_test(b, a)
+    assert forward["delta"] == pytest.approx(-back["delta"])
+    assert forward["p"] == pytest.approx(back["p"])
+    assert (forward["n10"], forward["n01"]) == (back["n01"], back["n10"])
+
+
+def test_a_lopsided_split_is_significant():
+    """The shape of the real result: many discordant pairs, nearly all one way."""
+    a = [True] * 238 + [False] * 27 + [True] * 500
+    b = [False] * 238 + [True] * 27 + [True] * 500
+    assert mcnemar_test(a, b)["p"] < 1e-30
+
+
+def test_an_even_split_is_not_significant():
+    """49/50 discordant is the internvl3 top1-vs-random null; it must not read as real."""
+    a = [True] * 49 + [False] * 50 + [True] * 676
+    b = [False] * 49 + [True] * 50 + [True] * 676
+    assert mcnemar_test(a, b)["p"] > 0.5
+
+
+def test_n_counts_items_not_discordant_pairs():
+    assert mcnemar_test([True] * 10, [True] * 10)["n"] == 10
+
+
+def test_accepts_numpy_and_lists_alike():
+    import numpy as np
+    a, b = [True, False, True], [False, False, True]
+    assert mcnemar_test(a, b) == mcnemar_test(np.array(a), np.array(b))
+
+
+def test_unpaired_lengths_are_rejected():
+    with pytest.raises(ValueError, match="must align"):
+        mcnemar_test([True, False], [True, False, True])
 
 
 # --- accuracy_table ----------------------------------------------------------
