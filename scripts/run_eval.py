@@ -183,7 +183,10 @@ def load_chunk_rows(args):
     for qid, vid, i in tqdm(picks, desc="chunks", unit="q"):
         start, end = meta["chunks"][vid][i]
         chunk_id = f"{vid}#{i}"
-        dest = args.chunks_dir / f"{vid}_{i}.mp4"
+        # Absolute, because qwen-vl-utils hands the path to its decoder as `file://<path>`.
+        # A relative path there parses as a URI *host* -- "outputs/chunks/x.mp4" becomes
+        # host "outputs", path "/chunks/x.mp4" -- and every clip fails to open.
+        dest = (args.chunks_dir / f"{vid}_{i}.mp4").resolve()
         slice_video(files.loc[vid, Columns.VIDEO_PATH], start, end, dest)
         rows.append(
             qa.loc[qid].to_dict()
@@ -283,6 +286,14 @@ def main(argv=None) -> int:
         return 130
     except Exception:
         log.exception("run failed")
+        return 1
+
+    # Decode failures are per-video warnings, so a run where every clip failed still gets
+    # here and would otherwise exit 0 over an empty file. That has already cost two
+    # overnight runs -- once to a missing video reader, once to a relative chunk path.
+    if rows and not results:
+        log.error("answered 0 of %d questions: every video was skipped. Check the decoder "
+                  "and the chunk paths in the warnings above.", len(rows))
         return 1
 
     log.info("wrote %d results to %s", len(results), out_path)
