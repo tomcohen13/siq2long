@@ -13,3 +13,4 @@ CLAUDE.md
 
 # inference outputs (results.jsonl and friends)
 outputs/
+embeddings/

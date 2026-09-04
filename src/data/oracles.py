@@ -81,8 +81,3 @@ def compute_segments_around_oracle(
         chunks[-1][1] = full_duration
 
     return chunks, oracle_idx
-
-
-# TODO
-def apply_segments_to_full_videos(path_to_videos: str | Path, segments: Mapping[str, list]) -> None:
-    pass

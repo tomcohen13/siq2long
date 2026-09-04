@@ -257,8 +257,6 @@ def encode(
         **queries,
     }
     meta = {
-        # (vid, chunk_idx) per row of the chunk tensors -- the addressing that lets any
-        # pool of distractors be assembled at scoring time.
         "chunk_ids": chunk_ids,
         "chunk_texts": chunk_texts,
         "oracle_idx": {vid: manifest[vid]["oracle_idx"] for vid in encoded},
