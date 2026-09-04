@@ -14,8 +14,9 @@ from pathlib import Path as FilePath
 import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.path import Path
-from matplotlib.patches import PathPatch
-from matplotlib.ticker import PercentFormatter
+from matplotlib.patches import PathPatch, Patch
+from matplotlib.lines import Line2D
+from matplotlib.ticker import MultipleLocator, PercentFormatter
 
 from stats import wilson_interval
 
@@ -274,6 +275,381 @@ REPRESENTATION_HUES = {
     "fused": "#009E73",
 }
 
+#: Categorical hues for encoders, keyed by cache stem, assigned in this fixed order and
+#: never cycled. Okabe-Ito blue/vermillion/green plus a violet: validated for CVD
+#: separation (worst adjacent dE 11.0 deutan, 25.8 normal) and >= 3:1 contrast on the light
+#: surface. A fifth encoder folds into "other" or gets its own facet rather than a new hue.
+ENCODER_HUES = {
+    "xclip": "#0072B2",
+    "pe-video": "#D55E00",
+    "bge": "#009E73",
+    # "bm25": "#7B52AB",
+}
+
+#: Shape carries the pool, hue carries the encoder, so the two variables never compete for
+#: the same channel. Filled circle for the task, filled diamond for the control.
+POOL_MARKERS = {"within": "o", "cross": "D"}
+
+
+
+def plot_pool_contrast(
+    within: dict[str, dict[tuple[str, str], float]],
+    cross: dict[str, dict[tuple[str, str], float]],
+    random_floor: dict[str, float],
+    path: str | FilePath,
+    title: str = "",
+    theme: Theme = LIGHT,
+) -> FilePath:
+    """
+    Top-1 with same-video distractors versus other-video distractors, one panel per encoder.
+
+    A dumbbell, because the quantity of interest is a *change* between two conditions on
+    the same configuration: one row per (representation, query), an open marker for the
+    within-video pool and a filled one for the cross-video pool, joined by a connector in
+    the representation's hue. Grouped bars would encode the same two numbers while making
+    the reader compute the difference; the connector *is* the difference, and its length
+    is the only thing the reader has to look at.
+
+    Encoders are faceted rather than interleaved: rows stay in one place across panels, so
+    "does this encoder fail the same way" is a vertical comparison at a fixed height. The
+    x-axis is shared, so connector lengths are comparable between panels too.
+
+    Pool sizes are matched between conditions, so the random floor is one line per panel
+    and every horizontal distance on the chart is interpretable.
+
+    Args:
+        within: `{encoder: {(representation, query): top1}}` against each video's own chunks.
+        cross: the same keys, against a same-sized pool drawn from other videos.
+        random_floor: `{encoder: mean(1/pool)}`, identical across conditions by construction.
+        path: where to write the figure.
+    """
+    encoders = [e for e in within if e in cross]
+    if not encoders:
+        raise ValueError("within and cross share no encoder")
+
+    rows = sorted(
+        {k for e in encoders for k in within[e] if k in cross[e]},
+        # Grouped by representation in the fixed hue order, question before question+options.
+        key=lambda k: (list(REPRESENTATION_HUES).index(k[0]), len(k[1])),
+    )
+    if not rows:
+        raise ValueError("within and cross share no configuration")
+
+    hi_x = max(max(cross[e].values()) for e in encoders)
+
+    with plt.rc_context(PAPER_RC):
+        fig, axes = plt.subplots(
+            1, len(encoders), sharex=True, sharey=True,
+            figsize=(3.6 * len(encoders) + 1.6, 0.46 * len(rows) + 2.0),
+            facecolor=theme.surface,
+        )
+        # subplots returns a bare Axes for a single panel and an array otherwise.
+        axes = axes if len(encoders) > 1 else [axes]
+
+        for ax, encoder in zip(axes, encoders):
+            ax.set_facecolor(theme.surface)
+            floor = random_floor[encoder]
+            ax.axvline(floor, ls=(0, (4, 3)), lw=1.4, color=theme.ink_muted, zorder=1)
+
+            for y, key in enumerate(reversed(rows)):
+                if key not in within[encoder] or key not in cross[encoder]:
+                    continue
+                colour = REPRESENTATION_HUES[key[0]]
+                a, b = within[encoder][key], cross[encoder][key]
+                ax.plot([a, b], [y, y], lw=2, color=colour, zorder=2, solid_capstyle="round")
+                ax.plot(a, y, "o", ms=8, color=theme.surface, markeredgecolor=colour,
+                        markeredgewidth=2, zorder=3)
+                ax.plot(b, y, "o", ms=8, color=colour, markeredgecolor=theme.surface,
+                        markeredgewidth=1.2, zorder=4)
+                ax.annotate(f"+{100 * (b - a):.1f}", xy=(max(a, b), y), xytext=(9, 0),
+                            textcoords="offset points", ha="left", va="center",
+                            color=theme.ink_secondary, fontsize=8.5)
+
+            ax.set_title(encoder, color=theme.ink, fontsize=10.5, fontweight="bold", pad=8)
+            ax.set_xlabel("top-1 oracle retrieval", color=theme.ink_secondary, fontsize=9.5)
+            ax.xaxis.set_major_formatter(PercentFormatter(xmax=1, decimals=0))
+            ax.xaxis.set_major_locator(MultipleLocator(0.10))
+            ax.grid(axis="x", color=theme.grid, lw=0.8, zorder=0)
+            ax.set_axisbelow(True)
+            for side in ("top", "right", "left"):
+                ax.spines[side].set_visible(False)
+            ax.spines["bottom"].set_color(theme.baseline)
+            ax.tick_params(colors=theme.ink_secondary, labelsize=9, length=0)
+
+        labels = [f"{rep} · {'question' if q == 'question' else 'question + options'}"
+                  for rep, q in reversed(rows)]
+        axes[0].set_yticks(range(len(rows)), labels, fontsize=9.5)
+        axes[0].set_ylim(-0.7, len(rows) - 0.3)
+        axes[0].set_xlim(0.10, max(hi_x + 0.12, 0.60))
+
+        # Shape carries the condition, hue carries the representation, and the row label
+        # names the representation in ink -- so identity is never colour alone.
+        marker = dict(marker="o", ls="none", ms=8, color=theme.ink_secondary)
+        fig.legend(
+            handles=[
+                Line2D([], [], **marker | {"mfc": theme.surface, "mew": 2},
+                       label="distractors from the same video"),
+                Line2D([], [], **marker | {"mew": 1.2, "mec": theme.surface},
+                       label="distractors from other videos"),
+                Line2D([], [], ls=(0, (4, 3)), lw=1.4, color=theme.ink_muted,
+                       label="random chunk"),
+            ],
+            loc="lower left", bbox_to_anchor=(0.0, 1.005), ncol=3, frameon=False,
+            handletextpad=0.5, columnspacing=1.6, fontsize=9.5,
+            labelcolor=theme.ink_secondary,
+        )
+        fig.tight_layout()
+        if title:
+            fig.text(0.0, 1.075, title, color=theme.ink, fontsize=12, ha="left",
+                     va="bottom", fontweight="bold")
+    return save_figure(fig, path)
+
+
+def plot_pool_contrast_overlay(
+    within: dict[str, dict[tuple[str, str], float]],
+    cross: dict[str, dict[tuple[str, str], float]],
+    random_floor: float,
+    path: str | FilePath,
+    title: str = "",
+    theme: Theme = LIGHT,
+) -> FilePath:
+    """
+    Every encoder's within- and cross-video top-1 on one shared axis.
+
+    The paper version of `plot_pool_contrast`. That function facets by encoder and hues by
+    representation, which is the right shape for reading one encoder in detail. This one
+    puts all encoders on a single x-axis so the comparison that matters -- *does this
+    encoder fail the same way* -- is a horizontal distance rather than a jump between
+    panels, and it survives being printed at column width.
+
+    Encoding: **hue is the encoder, shape is the pool.** Representation stays in the row
+    label, where it costs no channel. Marks are dodged vertically within each row so
+    nothing overlaps, and the connector line is gone: with two shapes the pairing is
+    already visible, and six connectors on one axis read as a barcode.
+
+    Args:
+        within: `{encoder: {(representation, query): top1}}` against each video's own chunks.
+        cross: the same keys, against a same-sized pool drawn from other videos.
+        random_floor: `mean(1/pool)`, shared by both conditions and every encoder because
+            pool sizes are matched.
+        path: where to write the figure.
+    """
+    encoders = [e for e in within if e in cross]
+    if not encoders:
+        raise ValueError("within and cross share no encoder")
+    unknown = [e for e in encoders if e not in ENCODER_HUES]
+    if unknown:
+        raise ValueError(f"no hue assigned for {unknown}; add them to ENCODER_HUES")
+
+    rows = sorted(
+        {k for e in encoders for k in within[e] if k in cross[e]},
+        # Grouped by representation in the fixed hue order, question before question+options.
+        key=lambda k: (list(REPRESENTATION_HUES).index(k[0]), len(k[1])),
+    )
+    if not rows:
+        raise ValueError("within and cross share no configuration")
+
+    # The dodge is in data units, so it only reads as "one group" if the row pitch stays
+    # tight: a tall row turns the same offset into a visible gap and the marks scatter.
+    span = 0.30
+    offsets = [0.0] if len(encoders) == 1 else [
+        span * (i / (len(encoders) - 1) - 0.5) for i in range(len(encoders))
+    ]
+
+    with plt.rc_context(PAPER_RC):
+        fig, ax = plt.subplots(figsize=(7.0, 0.52 * len(rows) + 1.7), facecolor=theme.surface)
+        ax.set_facecolor(theme.surface)
+
+        for y in range(len(rows)):
+            # A faint band per row keeps the dodged marks legible as one group.
+            if y % 2 == 0:
+                ax.axhspan(y - 0.5, y + 0.5, color=theme.grid, alpha=0.35, lw=0, zorder=0)
+
+        ax.axvline(random_floor, ls=(0, (4, 3)), lw=1.4, color=theme.ink_muted, zorder=1)
+
+        for y, key in enumerate(reversed(rows)):
+            for encoder, dy in zip(encoders, offsets):
+                colour = ENCODER_HUES[encoder]
+                present = {p: s[encoder][key] for p, s in (("within", within), ("cross", cross))
+                           if key in s[encoder]}
+                # A hairline, not a rule: shape and hue both carry identity, and neither
+                # says "these two marks are one measurement". Without it 24 marks on one
+                # axis read as a scatter. Kept faint so the marks stay the figure.
+                if len(present) == 2:
+                    ax.plot(list(present.values()), [y + dy] * 2, lw=1.2, color=colour,
+                            alpha=0.45, solid_capstyle="round", zorder=2)
+                for pool_type, value in present.items():
+                    ax.plot(
+                        value, y + dy, POOL_MARKERS[pool_type],
+                        ms=6.5 if pool_type == "cross" else 7.5, color=colour,
+                        markeredgecolor=theme.surface, markeredgewidth=1.4, zorder=3,
+                    )
+
+        labels = [f"{rep} · {'question' if q == 'question' else 'question + options'}"
+                  for rep, q in reversed(rows)]
+        ax.set_yticks(range(len(rows)), labels, fontsize=9.5)
+        ax.set_ylim(-0.5, len(rows) - 0.5)
+        ax.set_xlabel("top-1 oracle retrieval", color=theme.ink_secondary, fontsize=9.5)
+        ax.xaxis.set_major_formatter(PercentFormatter(xmax=1, decimals=0))
+        ax.xaxis.set_major_locator(MultipleLocator(0.10))
+        ax.set_xlim(0.08, max(max(v for e in encoders for v in cross[e].values()) + 0.05, 0.60))
+        ax.grid(axis="x", color=theme.grid, lw=0.8, zorder=1)
+        ax.set_axisbelow(False)
+        for side in ("top", "right", "left"):
+            ax.spines[side].set_visible(False)
+        ax.spines["bottom"].set_color(theme.baseline)
+        ax.tick_params(colors=theme.ink_secondary, labelsize=9, length=0)
+
+        shapes = [
+            Line2D([], [], marker=POOL_MARKERS[p], ls="none", ms=7,
+                   color=theme.ink_secondary, markeredgecolor=theme.surface,
+                   markeredgewidth=1.2, label=name)
+            for p, name in (("within", "same video"), ("cross", "other videos"))
+        ]
+        # Swatches, not markers: a third mark shape in the legend would read as a third
+        # pool condition.
+        hues = [Patch(facecolor=ENCODER_HUES[e], edgecolor="none", label=e) for e in encoders]
+        floor = [Line2D([], [], ls=(0, (4, 3)), lw=1.4, color=theme.ink_muted,
+                        label=f"random {random_floor:.1%}")]
+        fig.legend(
+            handles=shapes + hues + floor,
+            loc="lower left", bbox_to_anchor=(0.0, 1.005),
+            ncol=len(shapes) + len(hues) + 1, frameon=False,
+            handletextpad=0.5, columnspacing=1.5, fontsize=9.5,
+            labelcolor=theme.ink_secondary,
+        )
+        fig.tight_layout()
+        if title:
+            fig.text(0.0, 1.085, title, color=theme.ink, fontsize=12, ha="left",
+                     va="bottom", fontweight="bold")
+    return save_figure(fig, path)
+
+
+def plot_pool_by_condition(
+    within: dict[str, dict[tuple[str, str], float]],
+    cross: dict[str, dict[tuple[str, str], float]],
+    random_floor: float,
+    path: str | FilePath,
+    title: str = "",
+    theme: Theme = LIGHT,
+) -> FilePath:
+    """
+    Top-1 per retrieval configuration, both pools, both encoders, on one accuracy axis.
+
+    The main-paper figure, and deliberately the same grammar as `plot_condition_accuracy`:
+    accuracy on y, conditions on x, hue for the model. Two figures that read identically
+    cost the reader one orientation instead of two.
+
+    Chosen over a within-vs-cross scatter against the identity line. The scatter states the
+    claim more compactly, but only the *contrast*; this carries the contrast, the absolute
+    levels, and the chance floor as a single horizontal rule -- which is the only way the
+    reader sees that `transcript · question` falls **below** chance against its own video's
+    chunks.
+
+    Encoding: hue is the encoder, `POOL_MARKERS` shape is the pool, and a hairline joins
+    the pair so four marks per condition read as two measurements rather than a scatter.
+
+    Args:
+        within: `{encoder: {(representation, query): top1}}` against each video's own chunks.
+        cross: the same keys, against a same-sized pool drawn from other videos.
+        random_floor: `mean(1/pool)`, identical across pools and encoders by construction.
+        path: where to write the figure.
+    """
+    encoders = [e for e in within if e in cross]
+    if not encoders:
+        raise ValueError("within and cross share no encoder")
+    unknown = [e for e in encoders if e not in ENCODER_HUES]
+    if unknown:
+        raise ValueError(f"no hue assigned for {unknown}; add them to ENCODER_HUES")
+
+    conditions = sorted(
+        {k for e in encoders for k in within[e] if k in cross[e]},
+        key=lambda k: (list(REPRESENTATION_HUES).index(k[0]), len(k[1])),
+    )
+    if not conditions:
+        raise ValueError("within and cross share no configuration")
+
+    span = 0.30
+    offsets = [0.0] if len(encoders) == 1 else [
+        span * (i / (len(encoders) - 1) - 0.5) for i in range(len(encoders))
+    ]
+
+    with plt.rc_context(PAPER_RC):
+        fig, ax = plt.subplots(figsize=(7.2, 4.0), facecolor=theme.surface)
+        ax.set_facecolor(theme.surface)
+
+        ax.axhline(random_floor, ls=(0, (4, 3)), lw=1.4, color=theme.ink_muted, zorder=1)
+        # Below the line, not above: the space above it at the right edge holds marks.
+        ax.annotate(f"random {random_floor:.1%}", xy=(len(conditions) - 0.55, random_floor),
+                    xytext=(0, -5), textcoords="offset points", ha="right", va="top",
+                    color=theme.ink_muted, fontsize=8.5)
+
+        # Representations are grouped on x; a separator makes the grouping structural
+        # rather than something the reader infers from the labels.
+        for i in range(1, len(conditions)):
+            if conditions[i][0] != conditions[i - 1][0]:
+                ax.axvline(i - 0.5, color=theme.grid, lw=1.0, zorder=0)
+
+        for x, key in enumerate(conditions):
+            for encoder, dx in zip(encoders, offsets):
+                colour = ENCODER_HUES[encoder]
+                present = {p: s[encoder][key] for p, s in (("within", within), ("cross", cross))
+                           if key in s[encoder]}
+                if len(present) == 2:
+                    ax.plot([x + dx] * 2, list(present.values()), lw=1.2, color=colour,
+                            alpha=0.45, solid_capstyle="round", zorder=2)
+                for pool_type, value in present.items():
+                    ax.plot(
+                        x + dx, value, POOL_MARKERS[pool_type],
+                        ms=6.5 if pool_type == "cross" else 7.5, color=colour,
+                        markeredgecolor=theme.surface, markeredgewidth=1.4, zorder=3,
+                    )
+
+        ax.set_xticks(
+            range(len(conditions)),
+            ["question" if q == "question" else "+ options" for _, q in conditions],
+            fontsize=9.5,
+        )
+        ax.set_xlim(-0.6, len(conditions) - 0.4)
+        # Representation named once under its own pair, below the query labels.
+        for rep in dict.fromkeys(r for r, _ in conditions):
+            xs = [i for i, (r, _) in enumerate(conditions) if r == rep]
+            ax.annotate(
+                rep, xy=(sum(xs) / len(xs), 0.0), xycoords=("data", "axes fraction"),
+                xytext=(0, -26), textcoords="offset points", ha="center", va="top",
+                color=theme.ink, fontsize=10.5, fontweight="bold", annotation_clip=False,
+            )
+
+        ax.set_ylabel("top-1 oracle retrieval", color=theme.ink_secondary, fontsize=9.5)
+        ax.yaxis.set_major_formatter(PercentFormatter(xmax=1, decimals=0))
+        ax.yaxis.set_major_locator(MultipleLocator(0.10))
+        ax.grid(axis="y", color=theme.grid, lw=0.8, zorder=0)
+        ax.set_axisbelow(True)
+        for side in ("top", "right", "bottom"):
+            ax.spines[side].set_visible(False)
+        ax.spines["left"].set_color(theme.baseline)
+        ax.tick_params(colors=theme.ink_secondary, labelsize=9, length=0)
+
+        fig.legend(
+            handles=[
+                *(Line2D([], [], marker=POOL_MARKERS[p], ls="none", ms=7,
+                         color=theme.ink_secondary, markeredgecolor=theme.surface,
+                         markeredgewidth=1.2, label=name)
+                  for p, name in (("within", "same video"), ("cross", "other videos"))),
+                *(Patch(facecolor=ENCODER_HUES[e], edgecolor="none", label=e)
+                  for e in encoders),
+            ],
+            loc="lower left", bbox_to_anchor=(0.0, 1.005),
+            ncol=len(encoders) + 2, frameon=False,
+            handletextpad=0.5, columnspacing=1.5, fontsize=9.5,
+            labelcolor=theme.ink_secondary,
+        )
+        fig.tight_layout()
+        if title:
+            fig.text(0.0, 1.085, title, color=theme.ink, fontsize=12, ha="left",
+                     va="bottom", fontweight="bold")
+    return save_figure(fig, path)
+
 
 def plot_top1_by_pool_size(
     strata: dict[tuple[str, str], list[dict]],
@@ -341,5 +717,129 @@ def plot_top1_by_pool_size(
             fig.text(0.0, 1.10, title, color=theme.ink, fontsize=12, ha="left",
                      va="bottom", fontweight="bold")
         fig.text(0.0, 1.02, f"n = {n:,} questions · bars show 95% Wilson intervals",
+                 color=theme.ink_secondary, fontsize=9.5, ha="left", va="bottom")
+    return save_figure(fig, path)
+
+
+#: Hues for retrievers, assigned in this fixed order and never cycled. Validated for CVD
+#: separation (worst adjacent pair dE 21.9 protan, 31.2 normal) against the light surface.
+#: Only retrievers get a hue -- `random` and `oracle` are the floor and ceiling the
+#: measured system sits between, so they read as references in recessive ink instead.
+#: The same encoder hues under the display names the end-to-end figure labels its
+#: conditions with ("top1 (x-clip)"), so one encoder is one colour across every figure.
+RETRIEVER_HUES = {"x-clip": ENCODER_HUES["xclip"], "pe-video": ENCODER_HUES["pe-video"]}
+
+
+def plot_condition_accuracy(
+    counts: dict[tuple[str, str], tuple[int, int]],
+    path: str | FilePath,
+    chance: float = 0.25,
+    title: str = "",
+    theme: Theme = LIGHT,
+) -> FilePath:
+    """
+    QA accuracy per model under each retrieval condition, with 95% Wilson intervals.
+
+    Dots and intervals rather than bars: chance is 25%, so a bar growing from zero would
+    encode a quantity nobody cares about and invite the eye to compare areas. Dots carry
+    no area, which also makes the truncated accuracy axis honest -- necessary when every
+    result sits between 0.5 and 0.7 and the differences that matter are a few points wide.
+
+    Accuracy on y, conditions grouped by model on x, so comparing models is one horizontal
+    scan against a shared scale. `oracle` is the ceiling a perfect retriever reaches and
+    `random` the floor of picking blind; both are drawn in recessive ink because they are
+    references, not systems, and the shaded span between them is the headroom on offer.
+    The figure's claim is where the coloured retriever dot falls inside that span.
+
+    Args:
+        counts: `{(model, condition): (hits, n)}`. Conditions are "oracle", "random", or
+            "top1 (<retriever>)"; the retriever name selects the hue.
+        chance: the multiple-choice floor, reported in the subtitle.
+    """
+    models = list(dict.fromkeys(model for model, _ in counts))
+    order = ["random"] + [f"top1 ({r})" for r in RETRIEVER_HUES] + ["oracle"]
+    present = [c for c in order if any(cond == c for _, cond in counts)]
+
+    def hue(condition: str) -> str:
+        for name, colour in RETRIEVER_HUES.items():
+            if condition == f"top1 ({name})":
+                return colour
+        return theme.ink if condition == "oracle" else theme.ink_muted
+
+    def short(condition: str) -> str:
+        return condition.replace("top1 (", "").rstrip(")") if "top1" in condition else condition
+
+    bounds = [wilson_interval(h, n) for h, n in counts.values()]
+    lo_y = min(low for low, _ in bounds) - 0.02
+    hi_y = max(high for _, high in bounds) + 0.03
+
+    with plt.rc_context(PAPER_RC):
+        width = max(3.4, 0.62 * len(models) * len(present) + 1.0)
+        fig, ax = plt.subplots(figsize=(width, 3.4), facecolor=theme.surface)
+        ax.set_facecolor(theme.surface)
+        # Chance is 25% and every condition clears it by 30 points, so plotting it would
+        # spend most of the axis on empty space and squeeze the 5-point effect that is the
+        # actual subject. The floor goes in the subtitle instead.
+        if lo_y <= chance <= hi_y:
+            ax.axhline(chance, ls=(0, (4, 3)), lw=1.4, color=theme.ink_muted, zorder=1)
+
+        ticks, labels = [], []
+        col = 0.0
+        for model in models:
+            group = [c for c in present if (model, c) in counts]
+            span = {c: counts[(model, c)][0] / counts[(model, c)][1]
+                    for c in ("random", "oracle") if (model, c) in counts}
+            if len(span) == 2:
+                # The headroom a retriever could win, as a vertical span behind the group.
+                ax.bar(col + (len(group) - 1) / 2, span["oracle"] - span["random"],
+                       bottom=span["random"], width=len(group) - 0.15,
+                       color=theme.grid, zorder=0)
+
+            for cond in group:
+                hits, n = counts[(model, cond)]
+                value = hits / n
+                low, high = wilson_interval(hits, n)
+                colour = hue(cond)
+                ax.plot([col, col], [low, high], lw=1.6, color=colour, zorder=3)
+                ax.plot(col, value, "o", ms=7, color=colour, zorder=4,
+                        markeredgecolor=theme.surface, markeredgewidth=1.2)
+                ax.annotate(
+                    f"{value:.1%}", xy=(col, high), xytext=(0, 6),
+                    textcoords="offset points", ha="center",
+                    color=theme.ink_secondary, fontsize=9,
+                )
+                ticks.append(col)
+                labels.append(short(cond))
+                col += 1
+            # Model name centred under its own group, below the condition labels.
+            ax.annotate(
+                model, xy=(col - (len(group) + 1) / 2, 0.0), xycoords=("data", "axes fraction"),
+                xytext=(0, -22), textcoords="offset points", ha="center", va="top",
+                color=theme.ink, fontsize=10.5, fontweight="bold", annotation_clip=False,
+            )
+            col += 0.9
+
+        ax.set_xticks(ticks, labels, fontsize=9.5)
+        ax.set_xlim(-0.8, col - 0.3)
+        ax.set_ylabel("QA accuracy", color=theme.ink_secondary, fontsize=9.5)
+        ax.yaxis.set_major_formatter(PercentFormatter(xmax=1, decimals=0))
+        # Whole 5-point steps. The default locator lands on 2.5-point steps, which round
+        # to an uneven 52/55/57/60/62 ladder and make the axis look mis-drawn.
+        ax.yaxis.set_major_locator(MultipleLocator(0.05))
+        ax.set_ylim(lo_y, hi_y)
+        ax.grid(axis="y", color=theme.grid, lw=0.8, zorder=0)
+        ax.set_axisbelow(True)
+        for side in ("top", "right", "bottom"):
+            ax.spines[side].set_visible(False)
+        ax.spines["left"].set_color(theme.baseline)
+        ax.tick_params(colors=theme.ink_secondary, labelsize=9, length=0)
+
+        total = max(n for _, n in counts.values())
+        fig.tight_layout()
+        if title:
+            fig.text(0.0, 1.10, title, color=theme.ink, fontsize=12, ha="left",
+                     va="bottom", fontweight="bold")
+        fig.text(0.0, 1.00, f"n = {total:,} questions · 95% Wilson intervals · "
+                            f"band spans random to oracle · chance {chance:.0%}",
                  color=theme.ink_secondary, fontsize=9.5, ha="left", va="bottom")
     return save_figure(fig, path)
