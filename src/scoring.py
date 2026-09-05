@@ -41,46 +41,104 @@ POOL_TYPES = ("within", "cross")
 
 
 def question_pools(
-    meta: dict, pool_type: Literal[*POOL_TYPES] = "within", seed: int = 0
+    meta: dict,
+    pool_type: Literal[*POOL_TYPES] = "within",
+    seed: int = 0,
+    pool_size: int | None = None,
+    exclude_vids: set[str] | None = None,
 ) -> list[tuple[list[int], int]]:
     """
-    Per question, the chunk rows that compete and which of them is the oracle.
+    Assemble a "pool" of candidate video chunks per question, including the oracle.
 
-    `within` is the task: the oracle against the other minutes of its own video. `cross`
-    is the control: the oracle against the same *number* of chunks drawn at random from
-    other videos. Pool size is matched so the random floor is unchanged and the two differ
-    in one thing only -- whether the distractors come from the same video.
-
-    Both values are row indices into the chunk tensors, so callers never have to know how
-    a pool was built.
+    `within` pool: the oracle plus other minute-long chunks from the same video. These are
+                   the **hard** negatives -- same speakers, same setting, same conversation,
+                   so only what is happening socially tells them apart.
+    `cross` pool:  the oracle plus chunks drawn at random from other videos. These are the
+                   **easy** negatives -- different topic and setting. Used as a control.
 
     Args:
         meta: an artifact's `meta`, for `chunk_ids`, `query_vid` and `oracle_idx`.
-        pool_type: `"within"` for same-video distractors, `"cross"` for other-video ones.
-        seed: sampling seed, used by `"cross"` only.
+        pool_type: `"within"` for other chunks from the same video, `"cross"` for chunks
+            from other videos.
+        seed: sampling seed. Unused by `within`, whose pool is fully determined.
+        pool_size: how many chunks in each `cross` pool, oracle included. Defaults to the
+            question's own video chunk count, which keeps both pool types the same size so
+            their random floors match -- what evaluation needs. Only `cross` accepts it.
+        exclude_vids: videos these pools may not draw from. Training uses it to keep held-out
+            videos out of the candidates entirely. Only `cross` accepts it.
 
     Returns:
-        One `(rows, oracle_row)` per question, aligned with `meta["qids"]`.
+        One `(rows, oracle_row)` per question, aligned with `meta["qids"]`. Both are row
+        indices into the chunk tensors.
     """
     if pool_type not in POOL_TYPES:
         raise ValueError(f"unknown pool_type {pool_type!r}")
+    if pool_size is not None and pool_type != "cross":
+        raise ValueError(f"pool_size only applies to a 'cross' pool, not {pool_type!r}")
+    if pool_size is not None and pool_size < 2:
+        raise ValueError(f"a pool needs the oracle and at least one other chunk, got {pool_size}")
+    if exclude_vids and pool_type != "cross":
+        raise ValueError(f"exclude_vids only applies to a 'cross' pool, not {pool_type!r}")
 
-    rows = rows_by_video(meta["chunk_ids"])
+    chunk_rows = rows_by_video(meta["chunk_ids"])
+    every_row = np.arange(len(meta["chunk_ids"]))
+    excluded_rows = [row for vid in exclude_vids or () for row in chunk_rows.get(vid, [])]
     rng = np.random.default_rng(seed)
-    every = np.arange(len(meta["chunk_ids"]))
+    n_clamped = 0
 
     pools = []
     for vid in meta["query_vid"]:
-        own = rows[vid]
-        oracle = own[meta["oracle_idx"][vid]]
+        own_rows = chunk_rows[vid]
+        oracle_row = own_rows[meta["oracle_idx"][vid]]
+
         if pool_type == "within":
-            pools.append((own, oracle))
-        else:
-            # The whole video is excluded, not just the oracle: leaving its other minutes
-            # in would make a mixed pool and blunt the contrast.
-            picks = rng.choice(np.setdiff1d(every, own), size=len(own) - 1, replace=False)
-            pools.append(([oracle, *picks.tolist()], oracle))
+            pools.append((own_rows, oracle_row))
+            continue
+
+        other_video_rows = np.setdiff1d(every_row, [*own_rows, *excluded_rows])
+        left_to_sample = (pool_size or len(own_rows)) - 1
+        n_clamped += int(left_to_sample > len(other_video_rows))
+
+        sampled = rng.choice(
+            other_video_rows, size=min(left_to_sample, len(other_video_rows)), replace=False
+        )
+        pools.append(([oracle_row, *sampled.tolist()], oracle_row))
+
+    if n_clamped:
+        logger.warning("%d of %d pools were smaller than the %d chunks asked for",
+                       n_clamped, len(pools), pool_size)
     return pools
+
+
+def shuffle_queries(artifact: DualEncoderArtifact, seed: int = 0) -> DualEncoderArtifact:
+    """
+    Give every question a different question's query, drawn from another video.
+
+    Scoring this tells you how much of a result does not depend on the query at all. A model
+    that matches questions to chunks collapses to chance here. One that has instead learned
+    what oracle chunks look like -- wordier, longer, rarely the short trailing one -- keeps
+    most of its score, because none of that needs the question.
+
+    Chunks and oracles are untouched, so the pools and the random floor are unchanged and the
+    two numbers are directly comparable.
+    """
+    rng = np.random.default_rng(seed)
+    vids = np.asarray(artifact["meta"]["query_vid"])
+
+    order = np.empty(len(vids), dtype=int)
+    for i, vid in enumerate(vids):
+        elsewhere = np.flatnonzero(vids != vid)
+        if not len(elsewhere):
+            raise ValueError("every question is about the same video; nothing to swap with")
+        order[i] = rng.choice(elsewhere)
+
+    return {
+        **artifact,
+        "tensors": {
+            name: tensor[order] if name in set(QUERY_TENSORS.values()) else tensor
+            for name, tensor in artifact["tensors"].items()
+        },
+    }
 
 
 def rank_of(scores, oracle_score) -> int:

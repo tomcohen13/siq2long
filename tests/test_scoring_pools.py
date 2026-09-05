@@ -108,6 +108,74 @@ def test_cross_oracle_is_the_same_row_within_reports(meta):
     assert [o for _, o in within] == [o for _, o in cross]
 
 
+# --- pool_size: fixed-size cross pools, for building training batches --------
+
+def test_pool_size_counts_the_oracle(wide_meta):
+    """A pool of 8 is the oracle plus 7 others, not 8 others."""
+    for rows, _ in question_pools(wide_meta, "cross", pool_size=8):
+        assert len(rows) == 8
+
+
+def test_pool_size_still_holds_exactly_one_oracle(wide_meta):
+    for rows, oracle in question_pools(wide_meta, "cross", pool_size=8):
+        assert rows.count(oracle) == 1
+
+
+def test_pool_size_overrides_the_matched_default(wide_meta):
+    """Videos have 5 chunks here, so a size of 8 has to come from the default path."""
+    default = {len(rows) for rows, _ in question_pools(wide_meta, "cross")}
+    sized = {len(rows) for rows, _ in question_pools(wide_meta, "cross", pool_size=8)}
+    assert default == {5} and sized == {8}
+
+
+def test_pool_size_clamps_to_what_exists(meta):
+    """Only nine chunks in this fixture, so a pool of 50 cannot be filled."""
+    pools = question_pools(meta, "cross", pool_size=50)
+    assert all(len(rows) <= len(meta["chunk_ids"]) for rows, _ in pools)
+
+
+def test_pool_size_is_rejected_for_within(meta):
+    """`within` always takes the whole video; a size there would silently mean nothing."""
+    with pytest.raises(ValueError, match="only applies to a 'cross' pool"):
+        question_pools(meta, "within", pool_size=4)
+
+
+def test_pool_size_below_two_is_rejected(meta):
+    with pytest.raises(ValueError, match="at least one other chunk"):
+        question_pools(meta, "cross", pool_size=1)
+
+
+# --- exclude_vids: keeping held-out videos out of training pools -------------
+
+def test_excluded_videos_never_appear(meta):
+    for rows, oracle in question_pools(meta, "cross", pool_size=4, exclude_vids={"B"}):
+        assert not ({3, 4} & (set(rows) - {oracle}))
+
+
+def test_excluding_a_video_leaves_its_own_questions_a_pool(meta):
+    """B's questions still get B's oracle; only what they compete against is restricted."""
+    pools = question_pools(meta, "cross", pool_size=3, exclude_vids={"B"})
+    assert pools[2][1] == 3
+
+
+def test_excluding_nothing_matches_no_argument(meta):
+    assert question_pools(meta, "cross", seed=3) == question_pools(
+        meta, "cross", seed=3, exclude_vids=set()
+    )
+
+
+def test_exclude_vids_is_rejected_for_within(meta):
+    with pytest.raises(ValueError, match="only applies to a 'cross' pool"):
+        question_pools(meta, "within", exclude_vids={"B"})
+
+
+def test_unknown_video_in_exclude_vids_is_harmless(meta):
+    """Callers pass a split's video list, which may name videos this cache never held."""
+    assert question_pools(meta, "cross", seed=1, exclude_vids={"nope"}) == question_pools(
+        meta, "cross", seed=1
+    )
+
+
 # --- reproducibility ---------------------------------------------------------
 
 def test_same_seed_reproduces_the_draw(wide_meta):
