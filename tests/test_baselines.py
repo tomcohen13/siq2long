@@ -11,7 +11,7 @@ test arithmetic already covered. Query rendering lives in `test_retrieval_querie
 import numpy as np
 import pytest
 
-from baselines import bm25_ranks, tokenize
+from encoders.baselines import bm25_ranks, tokenize
 
 
 def make_artifact(chunk_texts: dict[str, list[str]], oracles: dict[str, int], query_vid: list[str]):

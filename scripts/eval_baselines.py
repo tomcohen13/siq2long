@@ -26,7 +26,7 @@ _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from baselines import TEXT_BASELINES  # noqa: E402
+from encoders.baselines import TEXT_BASELINES  # noqa: E402
 from config import Datasets  # noqa: E402
 from data.load import load_qa  # noqa: E402
 from encoders.base import DualEncoder, DualEncoderArtifact  # noqa: E402
