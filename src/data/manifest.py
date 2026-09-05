@@ -72,7 +72,7 @@ def _durations(paths: dict[str, Path], workers: int = 16) -> dict[str, float]:
 
 
 def build_manifest(
-    dataset_dir: str | Path,
+    path_to_media: str | Path,
     trims_path: str | Path,
     max_chunks: int = MAX_CHUNKS,
     min_chunks: int = MIN_CHUNKS,
@@ -82,7 +82,7 @@ def build_manifest(
     Chunk every downloaded video around its oracle.
 
     Args:
-        dataset_dir: SIQ2-Long root, holding `video/` and `transcript/`
+        path_to_media: the dataset's media root, holding `video/` and `transcript/`
         trims_path: the original SocialIQ-2.0 `trims.json`
         max_chunks / min_chunks: retrieval-pool bounds, see the constants above
         chunk_kwargs: forwarded to `compute_segments_around_oracle` (chunk_size, buffer_size)
@@ -91,7 +91,7 @@ def build_manifest(
         `{vid: {"duration": float, "chunks": [[start, end], ...], "oracle_idx": int}}`
         and the stats describing who was dropped and why.
     """
-    files = find_downloaded_files(dataset_dir, to_dataframe=True)
+    files = find_downloaded_files(path_to_media, to_dataframe=True)
     oracles = load_oracles(trims_path)
     stats = ManifestStats(downloaded=len(files))
 

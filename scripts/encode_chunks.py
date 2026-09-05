@@ -24,7 +24,7 @@ _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from config import DATASET_TO_DIR, Columns, Datasets  # noqa: E402
+from config import ROOT_DIR, DATASET_TO_MEDIA_DIR, Columns, Datasets, Dirs, Files  # noqa: E402
 from data.load import find_downloaded_files, load_qa  # noqa: E402
 from data.manifest import load_manifest  # noqa: E402
 from encoders import PEVideoEncoder, XCLIPEncoder  # noqa: E402
@@ -43,9 +43,9 @@ def parse_args(argv=None):
     )
     p.add_argument("--encoder", required=True, choices=sorted(ENCODERS))
     p.add_argument("--split", default="val", choices=["train", "val", "test"])
-    p.add_argument("--dataset-dir", type=Path, default=DATASET_TO_DIR[Datasets.SIQ2LONG])
-    p.add_argument("--manifest", type=Path, help="default: <dataset-dir>/video_chunks.json")
-    p.add_argument("--out", type=Path, help="default: <dataset-dir>/embeddings/<encoder>_<split>.pt")
+    p.add_argument("--media-dir", type=Path, default=DATASET_TO_MEDIA_DIR[Datasets.SIQ2LONG],
+                   help="where video/ and transcript/ live; default: PATH_TO_SIQ2LONG")
+    p.add_argument("--out", type=Path, help="default: siq2long/embeddings/<encoder>_<split>.pt")
     p.add_argument("--limit", type=int, help="first N videos only, for smoke tests")
     p.add_argument("--device", choices=["cpu", "mps", "cuda"], help="default: best available")
     p.add_argument("--batch-size", type=int, help="override the encoder's default")
@@ -59,8 +59,12 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     setup_logging(args.log_file, args.log_level)
 
-    manifest_path = args.manifest or args.dataset_dir / "video_chunks.json"
-    out_path = args.out or args.dataset_dir / "embeddings" / f"{args.encoder}_{args.split}.pt"
+    # Both live in the repo. The manifest and the embeddings are what every reported number
+    # is computed from, they are a few tens of MB, and unlike the videos they do not rot --
+    # so they are published rather than left out with the media.
+    dataset_dir = ROOT_DIR / Datasets.SIQ2LONG
+    manifest_path = dataset_dir / Files.MANIFEST
+    out_path = args.out or dataset_dir / Dirs.EMBEDDINGS / f"{args.encoder}_{args.split}.pt"
 
     banner(
         log,

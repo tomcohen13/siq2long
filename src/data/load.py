@@ -4,22 +4,42 @@ import logging
 import pandas as pd
 
 from pathlib import Path
-from config import DATASET_TO_DIR, Columns
+from config import ROOT_DIR, Columns, Datasets, Dirs
 
 logger = logging.getLogger(__name__)
 
-def load_qa(split: str, dataset: str) -> pd.DataFrame:
-	if dataset not in DATASET_TO_DIR:
-		raise ValueError(f"Invalid dataset specified, options are: {DATASET_TO_DIR.keys()}")
-	path = DATASET_TO_DIR.get(dataset) / "qa" / f"qa_{split}.json"
-	logger.info("loading %s", path)
-	df = pd.read_json(path, lines=True)
-	return df
-
-
-def find_downloaded_files(path_to_dataset: str | Path, to_dataframe: bool = False):
+def load_qa(split: str, dataset: str = Datasets.SIQ2LONG) -> pd.DataFrame:
 	"""
-	Find and return all video ids that have both a video and a transcript in the dataset directory.
+	The QA rows for one split: "train", "val" or "test".
+
+	Read from the repo rather than from wherever the media lives, because these are a few MB
+	and no result can be read without them.
+
+	`dataset` chooses whose copy. SIQ2 and SIQ2-Long ask the same questions about the same
+	videos and differ only in how much of each video the model is shown -- the 60s oracle
+	trim or the full original -- so each keeps its own copy and either can be run unchanged.
+	"""
+	if dataset not in set(Datasets):
+		raise ValueError(f"unknown dataset {dataset!r}, options are: {[*Datasets]}")
+	path = ROOT_DIR / dataset / Dirs.QA / f"qa_{split}.json"
+	if not path.exists():
+		raise FileNotFoundError(f"no {dataset} QA for split {split!r} at {path}")
+	logger.info("loading %s", path)
+	return pd.read_json(path, lines=True)
+
+
+def find_downloaded_files(path_to_media: str | Path, to_dataframe: bool = False):
+	"""
+	Find and return all video ids that have both a video and a transcript.
+
+	A video id with only one of the two is dropped: the pipeline encodes both modalities per
+	chunk, so half a video is not usable.
+
+	Args:
+		path_to_media: the dataset's media root, holding `video/` and `transcript/`. This is
+			the relocatable half of the dataset, so it is passed in rather than looked up --
+			see DATASET_TO_MEDIA_DIR.
+		to_dataframe: return the DataFrame itself rather than a dict keyed by row number.
 
 	Returns:
 		pd.DataFrame with columns:
@@ -27,11 +47,11 @@ def find_downloaded_files(path_to_dataset: str | Path, to_dataframe: bool = Fals
 			- path_to_video
 			- path_to_transcript
 	"""
-	if isinstance(path_to_dataset, str):
-		path_to_dataset = Path(path_to_dataset)
+	if isinstance(path_to_media, str):
+		path_to_media = Path(path_to_media)
 
-	videos_dir = path_to_dataset / "video"
-	transcripts_dir = path_to_dataset / "transcript"
+	videos_dir = path_to_media / Dirs.VIDEO
+	transcripts_dir = path_to_media / Dirs.TRANSCRIPT
 
 	videos_df = pd.DataFrame(
 		list(

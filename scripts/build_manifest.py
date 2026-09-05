@@ -6,8 +6,14 @@ Chunks every downloaded video around its SIQ2 oracle window and writes one JSON 
 video: its duration, its [start, end] chunk boundaries, and the index of the oracle chunk
 (the retrieval label). No video is cut on disk -- the manifest *is* the dataset.
 
+**YOU PROBABLY DON'T NEED TO RUN THIS!**
+It reads `siq2long/trims.json` and overwrites `siq2long/video_chunks.json`, both of which ship with this repo.
+So the manifest every result was computed against is already here. Rebuilding it requires the videos themselves
+and will produce a different manifest if you have a different subset of them downloaded.
+It is kept for posterity, and for anyone extending the dataset.
+
     python scripts/build_manifest.py
-    python scripts/build_manifest.py --max-chunks 20 --out /tmp/chunks.json
+    python scripts/build_manifest.py --media-dir /path/to/where/you/downloaded/media/siq2long --max-chunks 20
 
 ffprobe plus arithmetic, so it runs on a laptop in seconds and imports no torch.
 Requires `src` on the import path: `uv pip install -e .`, or PYTHONPATH=src.
@@ -24,7 +30,7 @@ _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from config import DATASET_TO_DIR, Columns, Datasets  # noqa: E402
+from config import ROOT_DIR, DATASET_TO_MEDIA_DIR, Columns, Datasets, Files  # noqa: E402
 from data.load import load_qa  # noqa: E402
 from data.manifest import MAX_CHUNKS, MIN_CHUNKS, build_manifest, write_manifest  # noqa: E402
 from logs import banner, setup_logging  # noqa: E402
@@ -36,9 +42,8 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    p.add_argument("--dataset-dir", type=Path, default=DATASET_TO_DIR[Datasets.SIQ2LONG])
-    p.add_argument("--trims", type=Path, help="default: <dataset-dir>/trims.json")
-    p.add_argument("--out", type=Path, help="default: <dataset-dir>/video_chunks.json")
+    p.add_argument("--media-dir", type=Path, default=DATASET_TO_MEDIA_DIR[Datasets.SIQ2LONG],
+                   help="where video/ and transcript/ live; default: PATH_TO_SIQ2LONG")
     p.add_argument("--max-chunks", type=int, default=MAX_CHUNKS)
     p.add_argument("--min-chunks", type=int, default=MIN_CHUNKS)
     p.add_argument("--chunk-size", type=int, default=60, help="seconds per chunk")
@@ -71,14 +76,18 @@ def report_coverage(manifest: dict) -> None:
 def main(argv=None) -> int:
     args = parse_args(argv)
     setup_logging(args.log_file, args.log_level)
-    out_path = args.out or args.dataset_dir / "video_chunks.json"
-    trims_path = args.trims or args.dataset_dir / "trims.json"
+
+    # Both of these are the light half of the dataset and live in the repo, so neither is a
+    # flag: the manifest is published with the code and is read from a fixed place.
+    dataset_dir = ROOT_DIR / Datasets.SIQ2LONG
+    trims_path = dataset_dir / Files.TRIMS
+    out_path = dataset_dir / Files.MANIFEST
 
     banner(
         log,
         "build_manifest",
         {
-            "dataset_dir": args.dataset_dir,
+            "media_dir": args.media_dir,
             "trims": trims_path,
             "out": out_path,
             "chunks": f"{args.min_chunks}..{args.max_chunks} of {args.chunk_size}s",
@@ -92,7 +101,7 @@ def main(argv=None) -> int:
 
     try:
         manifest, stats = build_manifest(
-            dataset_dir=args.dataset_dir,
+            path_to_media=args.media_dir,
             trims_path=trims_path,
             max_chunks=args.max_chunks,
             min_chunks=args.min_chunks,

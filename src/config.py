@@ -15,6 +15,19 @@ class Datasets(StrEnum):
     SIQ2 = "siq2"
     SIQ2LONG = "siq2long"
 
+class Dirs(StrEnum):
+    """Subdirectory names under a dataset root, so a path is never spelled twice."""
+    QA = "qa"
+    SPLITS = "splits"
+    VIDEO = "video"
+    TRANSCRIPT = "transcript"
+    EMBEDDINGS = "embeddings"
+
+class Files(StrEnum):
+    """File names at a dataset root. Where the root is depends on the caller, the name does not."""
+    MANIFEST = "video_chunks.json"
+    TRIMS = "trims.json"
+
 class Columns(StrEnum):
     # original siq2 columns
     QID = "qid"
@@ -33,9 +46,12 @@ class Columns(StrEnum):
     # siq2-long specific
     ORACLE = "oracle_idx"
 
-DATASET_TO_DIR = {
-	Datasets.SIQ2: Path(os.getenv("PATH_TO_SIQ2", ROOT_DIR / "datasets/socialiq2/siq2/")),
-	Datasets.SIQ2LONG: Path(os.getenv("PATH_TO_SIQ2LONG", ROOT_DIR / "datasets/siq2long/")),
+#: Where each dataset's media lives -- video, transcripts, embeddings, tens of gigabytes,
+#: which is why it is the part that moves. Unset, it falls back into the repo alongside the
+#: QA rows, manifest and splits, which stay here and are versioned with the code.
+DATASET_TO_MEDIA_DIR = {
+	Datasets.SIQ2: Path(os.getenv("PATH_TO_SIQ2", ROOT_DIR / Datasets.SIQ2)),
+	Datasets.SIQ2LONG: Path(os.getenv("PATH_TO_SIQ2LONG", ROOT_DIR / Datasets.SIQ2LONG)),
 }
 
 ANSWER_KEYS = [Columns.ANSWER_0, Columns.ANSWER_1, Columns.ANSWER_2, Columns.ANSWER_3]

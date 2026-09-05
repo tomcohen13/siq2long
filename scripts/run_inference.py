@@ -37,7 +37,7 @@ _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from config import DATASET_TO_DIR, Columns, Datasets  # noqa: E402
+from config import DATASET_TO_MEDIA_DIR, Columns, Datasets  # noqa: E402
 from data.load import find_downloaded_files, load_qa
 from data.transcripts import load_transcripts
 from data.videos import slice_video
@@ -170,7 +170,7 @@ def load_chunk_rows(args):
     # than a row, `.to_dict()` then nests every field under it, and the first symptom is
     # `int(gold)` failing on a dict several hundred questions into the run.
     qa = load_qa(args.split, args.dataset).drop_duplicates(Columns.QID).set_index(Columns.QID)
-    files = find_downloaded_files(DATASET_TO_DIR[args.dataset], to_dataframe=True)
+    files = find_downloaded_files(DATASET_TO_MEDIA_DIR[args.dataset], to_dataframe=True)
     files = files.set_index(Columns.VIDEO_ID)
     texts = {tuple(cid): t for cid, t in zip(meta["chunk_ids"], meta["chunk_texts"])}
 
@@ -199,7 +199,7 @@ def load_chunk_rows(args):
 def load_rows(dataset: str, split: str, limit: int | None):
     """QA rows joined to local media paths, plus the transcript per video."""
     qa = load_qa(split, dataset)
-    files = find_downloaded_files(DATASET_TO_DIR[dataset], to_dataframe=True)
+    files = find_downloaded_files(DATASET_TO_MEDIA_DIR[dataset], to_dataframe=True)
 
     rows = qa.merge(files, on=Columns.VIDEO_ID, how="inner")
     missing = sorted(set(qa[Columns.VIDEO_ID]) - set(files[Columns.VIDEO_ID]))
@@ -210,7 +210,7 @@ def load_rows(dataset: str, split: str, limit: int | None):
     if missing:
         log.warning("%d videos absent locally, e.g. %s", len(missing), missing[:5])
     if rows.empty:
-        raise SystemExit(f"no questions left after joining {split} to media in {DATASET_TO_DIR[dataset]}")
+        raise SystemExit(f"no questions left after joining {split} to media in {DATASET_TO_MEDIA_DIR[dataset]}")
 
     if limit:
         rows = rows.head(limit)
