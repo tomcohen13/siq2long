@@ -13,4 +13,14 @@ CLAUDE.md
 
 # inference outputs (results.jsonl and friends)
 outputs/
-embeddings/
+
+# The dataset's heavy half. Lands here when PATH_TO_SIQ2LONG is unset; usually elsewhere.
+siq2long/video/
+siq2long/transcript/
+siq2long/frames/
+siq2long/wav/
+
+# Embedding caches are published as release assets, not carried in git history -- each
+# re-encode would add another ~60MB permanently. The README beside them says where to get
+# them, and is tracked.
+siq2long/embeddings/*.pt
