@@ -161,7 +161,7 @@ def load_chunk_rows(args):
         artifact,
         selection_type=args.condition,
         representation="fused",
-        query="question+options",
+        query_form="question+options",
     )
     if args.limit:
         picks = picks[: args.limit]

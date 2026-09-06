@@ -251,8 +251,8 @@ def select_chunks_for_questions(
             the chunk for each question.
         representation: Which chunk representation to use when selecting the top1 chunk.
             Must be one of "video", "transcript", or "fused".
-        query: Which query representation to use when selecting the top1 chunk. Must be
-            one of "question" or "question+options".
+        query_form: Which query to rank with when selecting the top1 chunk. A key of
+            `QUERY_TENSORS`.
         seed: Random seed for reproducibility when using random selection.
     """
     meta, tensors = artifact["meta"], artifact["tensors"]
