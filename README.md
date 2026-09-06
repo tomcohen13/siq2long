@@ -179,16 +179,6 @@ scripts/           one CLI per pipeline step
 tests/             307 tests, no GPU or data required
 ```
 
-## Citation
-
-```bibtex
-@misc{siq2long,
-  title  = {Retrieval before answering: evidence localization in long-form social video QA},
-  author = {Cohen, Tom and others},
-  year   = {2026},
-  note   = {Preprint}
-}
-```
 
 Built on [Social-IQ 2.0](https://github.com/abwilf/Social-IQ-2.0-Challenge). The download
 script is adapted from the original SIQ codebase.
