@@ -727,7 +727,108 @@ def plot_top1_by_pool_size(
 #: measured system sits between, so they read as references in recessive ink instead.
 #: The same encoder hues under the display names the end-to-end figure labels its
 #: conditions with ("top1 (x-clip)"), so one encoder is one colour across every figure.
-RETRIEVER_HUES = {"x-clip": ENCODER_HUES["xclip"], "pe-video": ENCODER_HUES["pe-video"]}
+RETRIEVER_HUES = {
+    "x-clip": ENCODER_HUES["xclip"],
+    # The trained head sits beside the encoder it wraps, so the pair reads as one comparison.
+    # Kept short because these become x tick labels, four to a group.
+    "adapted": "#CC79A7",
+    "pe-video": ENCODER_HUES["pe-video"],
+}
+
+
+#: The three kinds of chunk in a pool, and the ink each gets. The oracle is the subject, so
+#: it takes the strong colour; uninformative chunks are what it loses to.
+CHUNK_KINDS = {
+    "the oracle": ENCODER_HUES["xclip"],
+    "uninformative chunks": "#CC79A7",
+    "other chunks": "#898781",
+}
+
+
+def plot_chunk_ordering(
+    positions: dict[tuple[str, str], dict[str, float]],
+    path: str | FilePath,
+    criterion: str,
+    n_questions: int,
+    title: str = "",
+    theme: Theme = LIGHT,
+) -> FilePath:
+    """
+    Where each kind of chunk lands in its pool, as the query changes.
+
+    One panel per backbone, two positions on x: the bare question, then the question with
+    its answer options. Three lines, one per kind of chunk. The claim is that the oracle
+    line and the uninformative line **cross** -- an interrogative query ranks chunks that
+    cannot be evidence above the one that is, and adding declarative text reverses it.
+
+    y is mean normalized rank inverted, so higher on the page means ranked earlier, which
+    is the direction a reader assumes without being told.
+
+    Args:
+        positions: `{(backbone, query_form): {kind: mean position}}`, positions in [0, 1]
+            with 0 = ranked first. Kinds are the keys of `CHUNK_KINDS`.
+        criterion: what made a chunk uninformative, stated on the figure. The whole result
+            turns on this threshold, so it belongs in the subtitle rather than the caption.
+        n_questions: for the subtitle.
+        title: drawn above the axes.
+    """
+    backbones = list(dict.fromkeys(b for b, _ in positions))
+    forms = list(dict.fromkeys(f for _, f in positions))
+
+    with plt.rc_context(PAPER_RC):
+        fig, axes = plt.subplots(
+            1, len(backbones), figsize=(2.9 * len(backbones) + 0.6, 3.5),
+            facecolor=theme.surface, sharey=True,
+        )
+        axes = axes if len(backbones) > 1 else [axes]
+
+        for ax, backbone in zip(axes, backbones):
+            ax.set_facecolor(theme.surface)
+            for kind, colour in CHUNK_KINDS.items():
+                ys = [positions[(backbone, form)][kind] for form in forms]
+                ax.plot(range(len(forms)), ys, color=colour, lw=2.0, zorder=3,
+                        marker="o", markersize=7, markeredgecolor=theme.surface, mew=1.5)
+                # Both ends carry their value: the reader is comparing where lines start
+                # against where they finish, and the crossing is the whole point.
+                for x, y, dx, ha in ((0, ys[0], -8, "right"), (len(forms) - 1, ys[-1], 8, "left")):
+                    ax.annotate(f"{y:.2f}", xy=(x, y), xytext=(dx, 0),
+                                textcoords="offset points", color=colour, fontsize=9,
+                                va="center", ha=ha, fontweight="bold")
+
+            ax.set_xticks(range(len(forms)), forms, fontsize=9.5)
+            # Room at both ends for the endpoint labels.
+            ax.set_xlim(-0.35, len(forms) - 0.55)
+            ax.set_title(backbone, color=theme.ink, fontsize=10.5, fontweight="bold", pad=8)
+            ax.grid(axis="y", color=theme.grid, lw=0.8, zorder=0)
+            ax.set_axisbelow(True)
+            for side in ("top", "right", "bottom"):
+                ax.spines[side].set_visible(False)
+            ax.spines["left"].set_color(theme.baseline)
+            ax.tick_params(colors=theme.ink_secondary, labelsize=9, length=0)
+
+        # 0 at the top: ranked first should sit high on the page. The numbers alone leave
+        # the reader to work out which direction is good, so both ends say so in words.
+        axes[0].set_ylim(0.68, 0.18)
+        axes[0].set_ylabel("where the encoder puts it", color=theme.ink_secondary, fontsize=9.5)
+        for frac, text, va in ((0.99, "ranked first", "top"), (0.01, "ranked last", "bottom")):
+            axes[0].annotate(text, xy=(0, frac), xycoords="axes fraction",
+                             xytext=(-46, 0), textcoords="offset points", rotation=90,
+                             ha="center", va=va, color=theme.ink_muted, fontsize=8.5)
+
+        fig.tight_layout()
+        # Below the panels, in a row: inside an axis it would sit on top of the lines.
+        fig.legend(
+            handles=[Line2D([], [], color=c, lw=2.0, marker="o", markersize=6, label=k)
+                     for k, c in CHUNK_KINDS.items()],
+            loc="lower center", bbox_to_anchor=(0.5, -0.10), ncol=len(CHUNK_KINDS),
+            frameon=False, fontsize=9.5, labelcolor=theme.ink_secondary,
+        )
+        if title:
+            fig.text(0.0, 1.06, title, color=theme.ink, fontsize=12, ha="left",
+                     va="bottom", fontweight="bold")
+        fig.text(0.0, 0.99, f"uninformative: {criterion} · n = {n_questions:,} questions",
+                 color=theme.ink_secondary, fontsize=9.5, ha="left", va="bottom")
+    return save_figure(fig, path)
 
 
 def plot_condition_accuracy(
