@@ -11,33 +11,15 @@ class PEVideoEncoder(DualEncoder):
     """
     Meta's Perception Encoder video branch, wrapped as a two-tower encoder.
 
-    `PeVideoModel` exposes no per-tower getters. It declares `get_text_features` and
-    `get_video_features`, but both are defined *nested inside* `__init__` and never
-    bound, so neither exists as a method -- `forward` is the only live path, and it
-    insists on text and video together. Retrieval needs them apart (encode N chunks
-    once, encode a query once), so the two branches below reproduce `forward`'s
-    arithmetic exactly against the submodules rather than reimplementing it:
+    `PeVideoModel` exposes no per-tower getters.
+    So the two branches below reproduce forward's per modality:
 
         video: video_encoder(...).pooler_output -> video_head
         text:  text_model(..., output_hidden_states=True).hidden_states[-1][:, 0]
                -> text_video_head
-
-    The text branch reads the CLS position of the final hidden state, not
-    `pooler_output`; the text tower is a masked-LM backbone loaded via `AutoModel`, and
-    `forward` sets `output_hidden_states=True` for exactly this reason.
-
-    Deviation worth knowing: PE scores with an *unnormalized* dot product plus a learned
-    scale and bias (a SigLIP-style sigmoid objective), so its native ranking is affected
-    by embedding norm in a way cosine is not. We L2-normalize anyway, to honor the
-    `DualEncoder` contract and keep one retrieval protocol across every backbone -- a
-    cross-model comparison is only meaningful if scoring is identical. Worth an A/B on a
-    dev slice before the numbers are final.
     """
 
     CHECKPOINT = "facebook/pe-av-large"
-
-    #: Not carried in the config. Checkpoints are trained at a fixed frame count and the
-    #: model card's example uses 16, so the video processor is told to resample to it.
     NUM_FRAMES = 16
 
     def __init__(self, checkpoint: str = CHECKPOINT):
@@ -45,10 +27,7 @@ class PEVideoEncoder(DualEncoder):
         self.checkpoint = checkpoint
         self.processor = AutoProcessor.from_pretrained(checkpoint)
         self.model, info = PeVideoModel.from_pretrained(checkpoint, output_loading_info=True)
-        # pe-av-large is the audio-visual release: its tensors are named video_model.* and
-        # video_plus_text_head.*, this class builds video_encoder/video_head, and there is
-        # no conversion mapping. If they don't meet, from_pretrained invents the missing
-        # weights and only logs it. Unexpected keys are fine -- the audio tower has no home.
+        # Unexpected keys are fine (audio tower) but not missing.
         if info["missing_keys"]:
             raise RuntimeError(f"{checkpoint} left weights uninitialized: {info['missing_keys'][:5]}")
         self.model.requires_grad_(False)

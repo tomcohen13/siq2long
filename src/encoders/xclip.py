@@ -8,17 +8,7 @@ from encoders.base import DualEncoder, DualEncoderOutput
 
 
 class XCLIPEncoder(DualEncoder):
-    """
-    Both towers read `pooler_output`, which for X-CLIP is already the projected vector:
-    `get_text_features` overwrites it with `text_projection(...)`, and
-    `get_video_features` applies `visual_projection` and then the MIT temporal
-    transformer. So the two land in one space and a dot product is cosine.
-
-    Note this deliberately bypasses `XCLIPModel.forward`, where `prompts_generator`
-    conditions the text embedding on the video. That cross-talk would make retrieval
-    cost one forward pass per (query, chunk) pair instead of one per query plus one per
-    chunk -- a dual encoder has to keep the towers independent.
-    """
+    """XCLIP-based dual encoder"""
 
     CHECKPOINT = "microsoft/xclip-base-patch16-16-frames"
 
