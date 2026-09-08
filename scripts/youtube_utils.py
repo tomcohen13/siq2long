@@ -1,6 +1,6 @@
 """
+Adapted from original Social-IQ 2.0
 Simple library for reading youtube VTT files
-author: Sheryl Mathew
 """
 import glob
 import json

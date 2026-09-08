@@ -1,10 +1,7 @@
-# Downloads the Social-IQ 2.0 dataset: video and transcripts, plus opt-in audio and frames.
-# Adapted from the original SIQ codebase (author: Sheryl Mathew) for SIQ2-Full.
-# author: Tom Cohen
-#
+# Adapted from the original SIQ codebase for SIQ2-Full.
 # Two modes, selected with --mode:
 #   siq2      - trim video and transcript to the 60s oracle window given by trims.json
-#   siq2-full - full-length video and transcript, nothing is trimmed
+#   siq2long - full-length video and transcript, nothing is trimmed
 import argparse
 import collections
 import concurrent.futures
@@ -30,14 +27,14 @@ SPLITS = ('train', 'val', 'test')
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Command-line arguments')
-    parser.add_argument('--data_dir', type=str, default='siq2',
+    parser.add_argument('--data_dir', type=str, default='siq2long',
                         help='Input directory holding trims.json and original_split.json')
     parser.add_argument('--output_dir', type=str, default=None,
                         help='Where video/transcript/audio/frames are written. Defaults to a '
                              'sibling of --data_dir named after --mode.')
-    parser.add_argument('--mode', type=str, default='siq2', choices=['siq2', 'siq2-full'],
+    parser.add_argument('--mode', type=str, default='siq2long', choices=['siq2long', 'siq2'],
                         help='siq2: trim video and transcript to the oracle window. '
-                             'siq2-full: keep them full length.')
+                             'siq2long: keep them full length.')
     parser.add_argument('--splits', type=str, nargs='+', default=list(SPLITS), choices=SPLITS,
                         metavar='SPLIT',
                         help='Which splits to download, in the order given, e.g. --splits val '
@@ -201,7 +198,7 @@ def process_video(id):
                 if full_video is None:
                     return 'no_video'
                 # -ss before -i seeks the input rather than decoding up to the cut. In
-                # siq2-full the download is kept verbatim, so the copy needs no transcode --
+                # siq2long the download is kept verbatim, so the copy needs no transcode --
                 # download_video has already verified it is playable.
                 with atomic(video_file) as tmp:
                     if trim:
@@ -345,7 +342,7 @@ def main():
     if args.audio:
         os.makedirs(mp3_path, exist_ok=True)
 
-    # siq2-full keeps whole videos, so the footprint is several times the trimmed set
+    # siq2long keeps whole videos, so the footprint is several times the trimmed set
     print('free space at {dir}: {gb:.1f} GB'.format(
         dir=output_dir, gb=shutil.disk_usage(output_dir).free / 1e9))
 
