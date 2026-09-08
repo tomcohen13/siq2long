@@ -1,12 +1,5 @@
 """
 Build the SIQ2-Long chunk manifest: one entry per video, describing how it is cut.
-
-The manifest is the dataset. No clips are written -- `data.videos.sample_frames` turns a
-[start, end] window into frame indices at read time, so cutting on disk would only add
-keyframe-snapped boundaries that move the oracle window off the SIQ2 trim.
-
-Deliberately free of torch and transformers: this is ffprobe plus arithmetic, and it
-should stay runnable on a laptop in seconds.
 """
 
 import json

@@ -1,17 +1,5 @@
 """
 Text-only retrieval baselines over chunk transcripts: BM25 and BGE.
-
-Rungs 3 and 4 of the ladder in FINDINGS §4, and the answer to *"you only tried
-CLIP-family encoders."* Both read the chunk transcripts that `retrieval.encode` persisted
-in the cache, so neither decodes a video and neither needs the encoder that wrote it --
-only `meta["chunk_texts"]`, `meta["chunk_ids"]` and `meta["oracle_idx"]`.
-
-Pooling and rank arithmetic come from `scoring`, so a baseline is scored exactly the way
-the encoders are: same distractors, same pessimistic tie-breaking, same random floor.
-That is the whole point of a baseline, and it is why neither function reimplements either.
-
-Queries are not in the cache -- only their embeddings are -- so callers rebuild the strings
-with `retrieval.render_queries_in_order`.
 """
 
 import logging

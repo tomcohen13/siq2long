@@ -46,9 +46,8 @@ class Columns(StrEnum):
     # siq2-long specific
     ORACLE = "oracle_idx"
 
-#: Where each dataset's media lives -- video, transcripts, embeddings, tens of gigabytes,
-#: which is why it is the part that moves. Unset, it falls back into the repo alongside the
-#: QA rows, manifest and splits, which stay here and are versioned with the code.
+# Where dataset media lives -- video, transcripts, embeddings.
+# Amounts to tens of GBs, so not assumed to be the same directory as the dataset repo.
 DATASET_TO_MEDIA_DIR = {
 	Datasets.SIQ2: Path(os.getenv("PATH_TO_SIQ2", ROOT_DIR / Datasets.SIQ2)),
 	Datasets.SIQ2LONG: Path(os.getenv("PATH_TO_SIQ2LONG", ROOT_DIR / Datasets.SIQ2LONG)),

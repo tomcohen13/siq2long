@@ -1,21 +1,14 @@
 """
 Trainable heads over frozen dual-encoder embeddings.
 
-The backbone never runs here. Chunks and questions were encoded once into a cache, so
-training is arithmetic on 512-d vectors. What is learned is only how to *move* those
-vectors: a residual branch on each side of the dot product, plus the two weights that fuse
-a chunk's video and transcript towers.
+Input is vectors that were pre-encoded by the dual encoder backbone (e.g., XCLIP).
 
-Every residual branch ends in a zero-initialized layer, so an untrained adapter reproduces
-the frozen baseline bit for bit. That is deliberate. It means every point of movement is
-attributable to training, and -- more importantly for this project -- that a *flat* result
-is readable: if `question` retrieval does not improve, it did not improve from a verified
-starting point, rather than from a representation we might have broken on the way in.
+Every residual branch is initialized such that an untrained adapter reproduces
+the frozen baseline.
 
-Two shapes are provided. `SmallAdapter` is a low-rank bottleneck, tens of thousands of
-parameters, sized for the fact that there are only ~2.9k training questions. `BigAdapter`
-is a wide MLP, low tens of millions. The comparison is itself a result: if the big one does
-not beat the small one, the ceiling is the frozen representation rather than the head.
+Two shapes are provided:
+- `SmallAdapter`: low-rank bottleneck, tens of thousands of parameters.
+- `BigAdapter`: wide MLP, low tens of millions.
 """
 
 import logging

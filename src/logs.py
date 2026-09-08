@@ -1,13 +1,5 @@
 """
 Console and file logging for evaluation runs.
-
-Two handlers, deliberately different: the console gets a tinted, time-only line
-at the level you asked for, the file gets everything at DEBUG with full
-timestamps and no escape codes. A run's log is an artifact -- it should be
-greppable months later, and ANSI codes in a file are not.
-
-Console lines go through `tqdm.write` so they don't shred an active progress bar,
-and colour is suppressed when stderr isn't a terminal or NO_COLOR is set.
 """
 
 import logging

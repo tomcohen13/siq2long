@@ -1,15 +1,13 @@
 """
-Encode a split's chunks and questions into one embedding cache.
+Encode chunks and queries (questions/questions+options) into one embedding cache.
 
-Stages 0-3 of oracle find: assemble the work list, encode each chunk's frames and its
-transcript, encode each question, persist. Scoring lives downstream and reads only the
-cache, so trying another scoring variant costs seconds rather than a re-encode.
+Steps:
+1. assemble the work list
+2. encode each chunk's frames + transcript
+3. encode each question
+4. persist.
 
-Chunks are stored as one **flat table** keyed by `(vid, chunk_idx)` rather than grouped
-per video. That is what lets a retrieval pool be assembled from any subset later --
-same-video distractors, distractors drawn from other videos, or a mix -- without encoding
-anything again. Chunk transcripts are persisted alongside their embeddings so lexical
-baselines run off the cache too, with no second pass over the VTTs.
+Chunks are stored as one flat table, keyed by `(vid, chunk_idx)` (not grouped per video).
 """
 
 import logging

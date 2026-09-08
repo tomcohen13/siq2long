@@ -1,20 +1,13 @@
 """
 Train an adapter on oracle find, over a cached artifact.
 
-One training example is a question and a pool of candidate chunks, exactly one of which is
-its oracle. The loss is cross-entropy over that pool -- InfoNCE with the negatives chosen
-rather than taken from whoever happens to share the batch.
+A training example is a query and a pool of candidate chunks, exactly one of which is
+the oracle.
 
-The pool is built from two sources, because they test different things:
+The loss is InfoNCE with the negatives chosen as follows:
 
-- **hard negatives**, other chunks of the same video. Same speakers, same setting, same
-  conversation, so only what is happening socially separates them from the oracle. This is
-  the task.
-- **easy negatives**, chunks from other videos. Different topic, different room. The frozen
-  encoders already tell these apart, so they are here to keep the space globally sensible,
-  not because they are difficult.
-
-Nothing here touches video or the backbone: it reads embeddings the encoder wrote once.
+- **hard negatives**, other chunks from the same video as the oracle.
+- **easy negatives**, chunks from other videos.
 """
 
 import logging

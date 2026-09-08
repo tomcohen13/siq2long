@@ -1,19 +1,11 @@
 """
-Batched multiple-choice inference over SIQ2 videos, backend-agnostic.
+Batched multiple-choice inference over SIQ2 videos, VLM-agnostic.
 
 Questions are grouped by video so each clip is decoded once and reused across
-all of its questions -- decoding dominates wall-clock, so this is the only
-optimization that matters here. Batch size comes from `vlm.max_batch_size`,
-which lets VideoLLaMA3 (1 question/pass) and Qwen (8) share this loop.
+all of its questions. Batch size comes from `vlm.max_batch_size`.
 
 Predictions are the first 0-3 digit in the completion. An unparseable
-completion is recorded as None and counted, never guessed -- a coin-flip
-fallback would inflate accuracy by ~25% of the unparsed rate.
-
-Results are plain dicts, matching the JSONL written alongside them. Pandas
-retypes None to NaN and int to np.int64, which makes "missing" mean two
-different things in the same run; use `to_frame` when you want a DataFrame
-for analysis.
+completion is recorded as None and counted, never guessed.
 """
 
 import gc

@@ -1,25 +1,10 @@
 
 # load & process transcripts 
-"""Deduplicate YouTube-style rolling WEBVTT transcripts.
+"""Deduplicate YouTube-style WEBVTT transcripts.
 
-Auto-generated VTTs use a rolling two-line window: each ~2s cue shows
-[previous line, current line], and each 10ms "transition" cue repeats the
-current line followed by a blank. So every spoken line appears 3-4 times,
-but crucially all repeats are *consecutive* in cue order.
+Algorithm: walk cues in order, normalize each line, dedup.
 
-Newer yt-dlp downloads also carry word-level karaoke tags inside the cue
-payload (`faculty<00:00:13.559><c> recep</c>...`). These must be stripped
-*before* the duplicate comparison: a tagged line and its untagged repeat are
-not string-equal, so leaving the tags in defeats the dedup and every line
-survives twice. `webvtt.Caption.text` returns the payload with tags already
-removed (`.raw_text` and `.lines` keep them) -- hence the parser.
-
-Algorithm: walk cues in order, normalize each payload line, emit it only if
-it differs from the last emitted line. O(n), no fuzzy matching. Each emitted
-line keeps the start time of the cue it first appeared in, which survives
-into (start, text) pairs for chunk alignment.
-
-Note: genuine immediate repetition in speech ("hi hi" on two lines) collapses
+NOTE: genuine immediate repetition in speech ("hi hi" on two lines) collapses
 to one. That is the accepted cost of exact-match dedup.
 """
 

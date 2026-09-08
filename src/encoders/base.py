@@ -23,14 +23,12 @@ class DualEncoderOutput(TypedDict):
 
 class DualEncoderArtifact(TypedDict):
     """
-    What `DualEncoder.save` writes / `retrieval.encode` returns.
+    What `DualEncoder.save()` writes / `retrieval.encode` returns.
 
-    The tensors are the embeddings, and the meta is the non-tensor payload that makes
-    them addressable: which (video, chunk) each row is, and the chunk transcripts BM25
-    needs.
+    The tensors are the embeddings: text embeddings, video embeddings, query embeddings.
+    The meta is the non-tensor payload: chunk_ids, chunk_texts, oracles, questions, etc
 
-    The scripts call this **the cache** and take it as `--cache`, because from their side
-    the point of it is not re-encoding. Same object.
+    NOTE: The scripts call this the **cache** and take it as `--cache`.
     """
     checkpoint: str
     num_frames: int

@@ -1,12 +1,4 @@
-"""
-Figures for the writeup.
-
-One hue, not one per model: the model names on the axis already carry identity, so
-colouring each bar differently would be decoration. What changes how this chart
-reads is the chance floor and the confidence intervals -- a 4-way multiple choice
-question has a 25% floor, and an accuracy without an interval invites readers to
-rank models on differences that are noise.
-"""
+"""Figures for the writeup."""
 
 from dataclasses import dataclass
 from pathlib import Path as FilePath

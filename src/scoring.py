@@ -1,8 +1,6 @@
 """
-Score an embedding cache: where does the oracle chunk rank among its video's chunks?
-
-Reads only what `retrieval.encode` wrote, so every variant here is a tensor op over
-cached vectors -- no video is touched. Each question is ranked against the chunks of its
+Methods for scoring an embedding cache: where does the oracle chunk rank among other chunks
+Reads the output of `retrieval.encode()`.Each question is ranked against the chunks of its
 own video, which is the task: find the oracle inside one long video, not across a corpus.
 """
 
